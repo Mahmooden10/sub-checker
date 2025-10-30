@@ -116,7 +116,7 @@ def main():
     print("\n--- Steps 1 & 2: Loading, Parsing, and Deduplicating ---")
     all_configs = load_configs(source=INPUT_CONFIGS_PATH)
     if not all_configs: return
-    unique_configs = deduplicate_configs(all_configs)
+    configs_to_test = unique_configs = deduplicate_configs(all_configs)
     print(f"Found {len(unique_configs)} unique configurations.")
     print("\n--- Step 3: Ensuring Go Test Engine is Ready ---")
     try:
@@ -149,7 +149,10 @@ def main():
 
     print("\n--- Step 4: Initial Connectivity (Ping) Test ---")
     tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
-    results = tester.test_uris(parsed_params=unique_configs, timeout=20, ping_url=test_url)
+    results = tester.test_uris(
+        parsed_params=configs_to_test,
+        timeout=20
+    )
 
     successful_params = [
         config for config in unique_configs
