@@ -52,7 +52,7 @@ jobs:
             pip-cache-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
-        run: pip install requests psutil retrying PyYaml
+        run: pip install -r requirements.txt
         # بهتره یک فایل requirements.txt بسازید و از اون استفاده کنید:
         # run: pip install -r requirements.txt
 
