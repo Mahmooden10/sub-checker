@@ -4,7 +4,7 @@ import re
 import time
 from pathlib import Path
 from typing import Optional, List
-
+import sys
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
 from python_v2ray.config_parser import load_configs, deduplicate_configs, ConfigParams, parse_uri
 from python_v2ray.tester import ConnectionTester
@@ -118,20 +118,34 @@ def main():
     if not all_configs: return
     unique_configs = deduplicate_configs(all_configs)
     print(f"Found {len(unique_configs)} unique configurations.")
-
     print("\n--- Step 3: Ensuring Go Test Engine is Ready ---")
     try:
-
         CORE_ENGINE_PATH.mkdir(exist_ok=True)
-
         downloader = BinaryDownloader(PROJECT_ROOT)
         if not downloader.ensure_binary("core_engine", CORE_ENGINE_PATH, OWN_REPO):
             raise RuntimeError("Failed to download the core testing engine.")
-        print("Go testing engine is ready.")
+        print("Go testing engine downloaded.")
+
+        generic_name = "core_engine"
+        if sys.platform == "win32":
+            expected_name = "core_engine.exe"
+        elif sys.platform == "darwin":
+            expected_name = "core_engine_macos"
+        else: # Linux
+            expected_name = "core_engine_linux"
+
+        generic_path = CORE_ENGINE_PATH / generic_name
+        expected_path = CORE_ENGINE_PATH / expected_name
+
+        if generic_path.is_file() and not expected_path.is_file():
+            print(f"Renaming '{generic_path.name}' to '{expected_path.name}' for compatibility...")
+            generic_path.rename(expected_path)
+
+        print("Go testing engine is ready for use.")
+
     except Exception as e:
         print(f"Fatal Error during binary check: {e}")
         return
-
 
     print("\n--- Step 4: Initial Connectivity (Ping) Test ---")
     tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
