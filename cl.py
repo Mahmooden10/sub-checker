@@ -90,7 +90,7 @@ def main():
 
     try:
         with open(CONFIG_FILE_PATH, "r") as f: settings = json.load(f)
-        test_url = settings.get("core", {}).get("test_url", "http://www.google.com/generate_204")
+        test_url = settings.get("core", {}).get("test_url", "http://connectivitycheck.gstatic.com/generate_204")
     except Exception as e:
         print(f"Error loading config.json: {e}"); return
 
