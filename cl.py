@@ -7,17 +7,13 @@ import logging
 from pathlib import Path
 from typing import Optional, List
 
-# --- Library Imports ---
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
 from python_v2ray.config_parser import load_configs, deduplicate_configs, parse_uri, ConfigParams, XrayConfigBuilder
 from python_v2ray.core import XrayCore
 from python_v2ray.tester import ConnectionTester
 
-# --- Setup Basic Logging for Library ---
-# این خط باعث میشه لاگ‌های مهم کتابخانه رو هم ببینیم (بدون جزئیات اضافی)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
-# --- Project Constants & Flags ---
 PROJECT_ROOT = Path(__file__).parent
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
@@ -33,7 +29,6 @@ CHECK_HOST_IRANIAN_NODES = [
     "ir1.node.check-host.net", "ir2.node.check-host.net", "ir3.node.check-host.net"
 ]
 
-# --- Helper Functions ---
 def get_public_ipv4(proxies: dict) -> Optional[str]:
     urls = ["https://api.ipify.org", "https://icanhazip.com"]
     for url in urls:
@@ -84,7 +79,6 @@ def is_ip_accessible_from_iran(ip: str, proxies: dict) -> bool:
         print(f"  CHECK-HOST Warning: Service failed ({e}). Assuming accessible to be safe.")
         return False
 
-# --- Main Application Logic ---
 def main():
     print("--- Starting Refactored Script (DEBUG MODE) ---")
 
@@ -125,21 +119,20 @@ def main():
 
     print("\n--- Step 4: Initial Connectivity (Ping) Test ---")
     tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
-
-    # تست اولیه
-    results = tester.test_uris(parsed_params=configs_to_test, timeout=20)
+    results = tester.test_uris(
+        parsed_params=configs_to_test,
+        timeout=20,
+        ping_url=test_url
+    )
 
     successful_tags = {r['tag'] for r in results if r.get('status') == 'success'}
     successful_items = [item for item in unique_items if item['params'].tag in successful_tags]
 
-    # --- DEBUG SECTION: Print why configs failed ---
     print("\n--- Initial Test Results Summary ---")
     for res in results:
         if res.get('status') != 'success':
-            # چاپ دلیل خطا برای هر تگ ناموفق (بدون چاپ کل کانفیگ)
             print(f"  [FAILED] Tag: {res.get('tag'):<30} | Reason: {res.get('status')}")
     print("-" * 40)
-    # -----------------------------------------------
 
     print(f"Initial test found {len(successful_items)} working configurations out of {len(configs_to_test)}.")
     if not successful_items:
@@ -159,7 +152,6 @@ def main():
         builder.config["routing"]["rules"].append({"type": "field", "inboundTag": ["socks_in"], "outboundTag": outbound["tag"]})
 
         try:
-            # debug_mode=True را فعال می‌کنیم تا اگر Xray کرش کرد، فایل کانفیگ موقتش پاک نشه (برای بررسی احتمالی)
             with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=False) as xray:
                 if not xray.is_running():
                     print(f"  Error: Temporary proxy failed to start for {config_param.protocol} config.")
