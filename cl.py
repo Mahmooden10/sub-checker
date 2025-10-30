@@ -117,6 +117,18 @@ def main():
     all_configs = load_configs(source=INPUT_CONFIGS_PATH)
     if not all_configs: return
     configs_to_test = unique_configs = deduplicate_configs(all_configs)
+    print("Ensuring all configuration tags are unique...")
+    seen_tags = set()
+    tag_counts = {}
+    for config in unique_configs:
+        original_tag = config.tag
+        if original_tag in seen_tags:
+            tag_counts[original_tag] = tag_counts.get(original_tag, 1) + 1
+            new_tag = f"{original_tag}_{tag_counts[original_tag]}"
+            config.tag = new_tag
+            print(f"  Duplicate tag found: '{original_tag}'. Renaming to '{new_tag}'.")
+        seen_tags.add(config.tag)
+
     print(f"Found {len(unique_configs)} unique configurations.")
     print("\n--- Step 3: Ensuring Go Test Engine is Ready ---")
     try:
