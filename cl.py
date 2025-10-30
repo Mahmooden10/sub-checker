@@ -185,7 +185,7 @@ def main():
             print(f"  Warning: Could not find original URI for tag '{config.tag}'. Skipping.")
             continue
 
-        session_results = tester.test_uris(parsed_params=[config], timeout=10, ping_url=test_url)
+        session_results = tester.test_uris(parsed_params=[config], timeout=10)
         if not session_results or session_results[0].get('status') != 'success':
             print(f"  Config failed the second check. Skipping.")
             continue
