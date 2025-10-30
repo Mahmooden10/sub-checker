@@ -51,7 +51,7 @@ jobs:
 
       - name: Run checker script
         # !!! مطمئن شوید که دارید اسکریپت جدید را اجرا می‌کنید !!!
-        run: python refactored_cl.py
+        run: python cl.py
 
       - name: Commit and Push changes
         run: |
