@@ -121,12 +121,17 @@ def main():
 
     print("\n--- Step 3: Ensuring Go Test Engine is Ready ---")
     try:
+
+        CORE_ENGINE_PATH.mkdir(exist_ok=True)
+
         downloader = BinaryDownloader(PROJECT_ROOT)
         if not downloader.ensure_binary("core_engine", CORE_ENGINE_PATH, OWN_REPO):
             raise RuntimeError("Failed to download the core testing engine.")
+        print("Go testing engine is ready.")
     except Exception as e:
-        print(f"Fatal Error: {e}")
+        print(f"Fatal Error during binary check: {e}")
         return
+
 
     print("\n--- Step 4: Initial Connectivity (Ping) Test ---")
     tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
