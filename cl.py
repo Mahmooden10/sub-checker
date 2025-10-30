@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# --- Library Imports ---
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
 from python_v2ray.config_parser import load_configs, deduplicate_configs, parse_uri, ConfigParams, XrayConfigBuilder
 from python_v2ray.core import XrayCore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
+# --- Project Constants & Flags ---
 PROJECT_ROOT = Path(__file__).parent
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
@@ -30,6 +32,7 @@ CHECK_HOST_IRANIAN_NODES = [
     "ir1.node.check-host.net", "ir2.node.check-host.net", "ir3.node.check-host.net"
 ]
 
+# --- Helper Functions (کامل و بدون تغییر) ---
 def get_public_ipv4(proxies: dict) -> Optional[str]:
     urls = ["https://api.ipify.org", "https://icanhazip.com"]
     for url in urls:
@@ -87,6 +90,21 @@ def is_ip_accessible_from_iran(ip_to_check: str, proxies_to_use: dict) -> bool:
         logging.warning(f"  CHECK-HOST Filtered: Target IP {ip_to_check} INACCESSIBLE from all Iranian nodes.")
         return True
 
+# ----- Patched Builder to fix library bugs -----
+class PatchedXrayConfigBuilder(XrayConfigBuilder):
+    def _build_protocol_settings(self, params: ConfigParams) -> Dict[str, Any]:
+        settings = super()._build_protocol_settings(params)
+        if not settings and params.protocol == "socks":
+            return {"servers": [{"address": params.address, "port": params.port}]}
+        return settings
+    
+    def _build_stream_settings(self, params: ConfigParams, **kwargs) -> Dict[str, Any]:
+        stream_settings = super()._build_stream_settings(params, **kwargs)
+        if params.network == "grpc" and not stream_settings.get("grpcSettings", {}).get("serviceName"):
+            if "grpcSettings" in stream_settings:
+                del stream_settings["grpcSettings"]
+        return stream_settings
+
 def check_one_proxy(item: dict, test_url: str) -> Optional[str]:
     config_param, original_uri, local_port = item['params'], item['original_uri'], item['local_port']
     logging.info(f"--> Starting check for: {config_param.display_tag} on port {local_port}")
@@ -120,7 +138,7 @@ def main():
         test_url = settings.get("core", {}).get("test_url", "http://connectivitycheck.gstatic.com/generate_204")
     except Exception as e:
         print(f"Error loading config.json: {e}"); return
-
+    
     all_uris = Path(INPUT_CONFIGS_PATH).read_text().splitlines()
     configs_with_uris = []
     for uri in all_uris:
@@ -135,7 +153,10 @@ def main():
     except Exception as e:
         print(f"Fatal Error during binary check: {e}"); return
 
-    builder = XrayConfigBuilder()
+    # ----- FIX IS HERE: Use the PatchedXrayConfigBuilder -----
+    builder = PatchedXrayConfigBuilder()
+    # --------------------------------------------------------
+    
     base_port = 20800
     expected_ports = set()
     for i, item in enumerate(unique_items):
@@ -151,9 +172,8 @@ def main():
     try:
         with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
             if not xray.is_running(): raise RuntimeError("Xray failed to start.")
-
+            
             print(f"\n--- Xray is running with {len(unique_items)} proxies. Waiting for all ports to become ready... ---")
-
             ready_ports = set()
             for _ in range(40):
                 ports_to_check = expected_ports - ready_ports
@@ -161,22 +181,20 @@ def main():
                     try:
                         with socket.create_connection(("127.0.0.1", port), timeout=0.25):
                             ready_ports.add(port)
-                    except (socket.timeout, ConnectionRefusedError):
-                        pass
+                    except (socket.timeout, ConnectionRefusedError): pass
                 if ready_ports == expected_ports:
-                    print(f"All {len(expected_ports)} ports are ready.")
-                    break
+                    print(f"All {len(expected_ports)} ports are ready."); break
                 time.sleep(0.25)
             else:
                 raise RuntimeError(f"Timeout: Not all proxy ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
-
+            
             print("\n--- Starting all checks concurrently ---")
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 future_to_item = {executor.submit(check_one_proxy, item, test_url): item for item in unique_items}
                 for future in as_completed(future_to_item):
                     if result_uri := future.result():
                         final_uris_to_write.append(result_uri)
-
+    
     except Exception as e:
         logging.critical(f"A critical error occurred: {e}")
 
