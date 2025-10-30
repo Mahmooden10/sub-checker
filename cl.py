@@ -3,14 +3,19 @@ import requests
 import re
 import time
 import sys
+import logging
 from pathlib import Path
 from typing import Optional, List
 
-# --- Library Imports (حالا همه چیز از کتابخانه اصلی میاد) ---
+# --- Library Imports ---
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
 from python_v2ray.config_parser import load_configs, deduplicate_configs, parse_uri, ConfigParams, XrayConfigBuilder
 from python_v2ray.core import XrayCore
 from python_v2ray.tester import ConnectionTester
+
+# --- Setup Basic Logging for Library ---
+# این خط باعث میشه لاگ‌های مهم کتابخانه رو هم ببینیم (بدون جزئیات اضافی)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
 # --- Project Constants & Flags ---
 PROJECT_ROOT = Path(__file__).parent
@@ -28,7 +33,7 @@ CHECK_HOST_IRANIAN_NODES = [
     "ir1.node.check-host.net", "ir2.node.check-host.net", "ir3.node.check-host.net"
 ]
 
-# --- Helper Functions (بدون تغییر) ---
+# --- Helper Functions ---
 def get_public_ipv4(proxies: dict) -> Optional[str]:
     urls = ["https://api.ipify.org", "https://icanhazip.com"]
     for url in urls:
@@ -50,7 +55,7 @@ def fetch_country_code(proxies: dict) -> str:
 
 def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
     parts = original_uri.strip().split("#", 1)
-    base, tag_part = parts[0], parts[1] if len(parts) > 1 else ""
+    base = parts[0]
     p = parse_uri(original_uri)
     if not p: return original_uri
     base_name = p.display_tag.split("::")[0].strip()
@@ -79,12 +84,13 @@ def is_ip_accessible_from_iran(ip: str, proxies: dict) -> bool:
         print(f"  CHECK-HOST Warning: Service failed ({e}). Assuming accessible to be safe.")
         return False
 
-# --- Main Application Logic (حالا بدون پچ و کد اضافی) ---
+# --- Main Application Logic ---
 def main():
-    print("--- Starting Refactored Script ---")
-    
+    print("--- Starting Refactored Script (DEBUG MODE) ---")
+
     try:
         with open(CONFIG_FILE_PATH, "r") as f: settings = json.load(f)
+        test_url = settings.get("core", {}).get("test_url", "http://www.google.com/generate_204")
     except Exception as e:
         print(f"Error loading config.json: {e}"); return
 
@@ -93,14 +99,13 @@ def main():
     unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port): item for item in configs_with_uris}.values())
     configs_to_test = [item['params'] for item in unique_items]
 
-    # منطق منحصر به فرد کردن تگ‌ها همچنان لازم است
     seen_tags = set()
     for config in configs_to_test:
         original_tag, count, new_tag = config.tag, 1, config.tag
         while new_tag in seen_tags:
             new_tag = f"{original_tag}_{count}"; count += 1
         config.tag = new_tag; seen_tags.add(new_tag)
-        
+
     print(f"Found {len(configs_to_test)} unique configurations.")
 
     print("\n--- Step 3: Ensuring Binaries are Ready ---")
@@ -109,7 +114,6 @@ def main():
         downloader = BinaryDownloader(PROJECT_ROOT)
         if not downloader.ensure_binary("core_engine", CORE_ENGINE_PATH, OWN_REPO):
             raise RuntimeError("Failed to download core_engine.")
-        # کد تغییر نام مثل قبل
         generic_path = CORE_ENGINE_PATH / "core_engine"
         if sys.platform == "win32": expected_name = "core_engine.exe"
         elif sys.platform == "darwin": expected_name = "core_engine_macos"
@@ -121,12 +125,23 @@ def main():
 
     print("\n--- Step 4: Initial Connectivity (Ping) Test ---")
     tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
+
+    # تست اولیه
     results = tester.test_uris(parsed_params=configs_to_test, timeout=20)
-    
+
     successful_tags = {r['tag'] for r in results if r.get('status') == 'success'}
     successful_items = [item for item in unique_items if item['params'].tag in successful_tags]
-    
-    print(f"Initial test found {len(successful_items)} working configurations.")
+
+    # --- DEBUG SECTION: Print why configs failed ---
+    print("\n--- Initial Test Results Summary ---")
+    for res in results:
+        if res.get('status') != 'success':
+            # چاپ دلیل خطا برای هر تگ ناموفق (بدون چاپ کل کانفیگ)
+            print(f"  [FAILED] Tag: {res.get('tag'):<30} | Reason: {res.get('status')}")
+    print("-" * 40)
+    # -----------------------------------------------
+
+    print(f"Initial test found {len(successful_items)} working configurations out of {len(configs_to_test)}.")
     if not successful_items:
         Path(FINAL_CONFIGS_PATH).write_text(""); return
 
@@ -137,7 +152,6 @@ def main():
         config_param, original_uri = item['params'], item['original_uri']
         print(f"\nProcessing config {i+1}/{len(successful_items)}: {config_param.tag}")
 
-        # ----- حالا از XrayConfigBuilder اصلی کتابخانه استفاده می‌کنیم -----
         builder = XrayConfigBuilder()
         builder.add_inbound({"port": LOCATION_CHECK_PORT, "listen": "127.0.0.1", "protocol": "socks", "settings": {"auth": "noauth", "udp": True}, "tag": "socks_in"})
         outbound = builder.build_outbound_from_params(config_param)
@@ -145,13 +159,15 @@ def main():
         builder.config["routing"]["rules"].append({"type": "field", "inboundTag": ["socks_in"], "outboundTag": outbound["tag"]})
 
         try:
-            with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder) as xray:
+            # debug_mode=True را فعال می‌کنیم تا اگر Xray کرش کرد، فایل کانفیگ موقتش پاک نشه (برای بررسی احتمالی)
+            with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=False) as xray:
                 if not xray.is_running():
-                    print("  Error: Could not start temporary proxy. Skipping."); continue
-                
-                print(f"  Temporary proxy is running on port {LOCATION_CHECK_PORT}..."); time.sleep(2) 
+                    print(f"  Error: Temporary proxy failed to start for {config_param.protocol} config.")
+                    continue
+
+                print(f"  Temporary proxy is running on port {LOCATION_CHECK_PORT}..."); time.sleep(2)
                 proxies = {"http": f"socks5h://127.0.0.1:{LOCATION_CHECK_PORT}", "https": f"socks5h://127.0.0.1:{LOCATION_CHECK_PORT}"}
-                
+
                 if CHECK_LOC:
                     country_code = fetch_country_code(proxies)
                     exit_ip = get_public_ipv4(proxies)
