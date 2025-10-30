@@ -4,9 +4,9 @@ import re
 import time
 import sys
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
-# --- Library Imports ---
+# --- Library Imports (حالا همه چیز از کتابخانه اصلی میاد) ---
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
 from python_v2ray.config_parser import load_configs, deduplicate_configs, parse_uri, ConfigParams, XrayConfigBuilder
 from python_v2ray.core import XrayCore
@@ -28,14 +28,12 @@ CHECK_HOST_IRANIAN_NODES = [
     "ir1.node.check-host.net", "ir2.node.check-host.net", "ir3.node.check-host.net"
 ]
 
-# --- Helper Functions (از کد اصلی شما) ---
-# ... (تمام توابع جانبی مثل get_public_ipv4 و بقیه اینجا قرار می‌گیرند) ...
+# --- Helper Functions (بدون تغییر) ---
 def get_public_ipv4(proxies: dict) -> Optional[str]:
     urls = ["https://api.ipify.org", "https://icanhazip.com"]
     for url in urls:
         try:
-            r = requests.get(url, timeout=10, proxies=proxies)
-            r.raise_for_status()
+            r = requests.get(url, timeout=10, proxies=proxies); r.raise_for_status()
             ip = r.text.strip()
             if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
                 print(f"  Successfully fetched exit IP: {ip}"); return ip
@@ -44,8 +42,7 @@ def get_public_ipv4(proxies: dict) -> Optional[str]:
 
 def fetch_country_code(proxies: dict) -> str:
     try:
-        r = requests.get("https://ipinfo.io/json", timeout=10, proxies=proxies)
-        r.raise_for_status()
+        r = requests.get("https://ipinfo.io/json", timeout=10, proxies=proxies); r.raise_for_status()
         country = r.json().get('country', 'XX')
         print(f"  Successfully fetched country code: {country}"); return country
     except Exception:
@@ -82,57 +79,7 @@ def is_ip_accessible_from_iran(ip: str, proxies: dict) -> bool:
         print(f"  CHECK-HOST Warning: Service failed ({e}). Assuming accessible to be safe.")
         return False
 
-# ----- FIX IS HERE: A Patched version of the library's XrayConfigBuilder -----
-class PatchedXrayConfigBuilder(XrayConfigBuilder):
-    def _build_stream_settings(self, params: ConfigParams, **kwargs) -> Dict[str, Any]:
-        """
-        This is an overridden version of the method from the library to fix a bug
-        that generates an invalid 'tcpSettings' object for plain TCP connections.
-        """
-        stream_settings = {"network": params.network}
-        if params.security in ["tls", "reality"]:
-            stream_settings["security"] = params.security
-            security_settings = {"allowInsecure": kwargs.get("allow_insecure", False), "serverName": params.sni, "fingerprint": params.fp}
-            if params.alpn: security_settings["alpn"] = params.alpn.split(',')
-            if params.security == "reality":
-                security_settings.update({"publicKey": params.pbk, "shortId": params.sid, "spiderX": params.spx})
-                stream_settings["realitySettings"] = security_settings
-            else:
-                stream_settings["tlsSettings"] = security_settings
-
-        host_for_header = params.host if params.host else params.sni
-        
-        # Original map from the library, but with the "tcp" entry removed to be handled manually.
-        network_map = {
-            "kcp":  {"kcpSettings":  {"header": {"type": params.header_type}, "seed": params.path}},
-            "ws":   {"wsSettings":   {"path": params.path, "headers": {"Host": host_for_header}}},
-            "h2":   {"httpSettings": {"host": [host_for_header], "path": params.path}},
-            "quic": {"quicSettings": {"security": params.host, "key": params.path, "header": {"type": params.header_type}}},
-            "grpc": {"grpcSettings": {"serviceName": params.path}},
-        }
-        
-        # Manual, corrected handling for TCP
-        if params.network == "tcp":
-            if params.header_type == "http":
-                # This is the correct structure for HTTP headers over TCP
-                stream_settings["tcpSettings"] = {
-                    "header": {
-                        "type": "http",
-                        "request": {
-                            "path": [params.path or "/"],
-                            "headers": { "Host": [host_for_header] }
-                        }
-                    }
-                }
-            # If header_type is "none", we do nothing, which is the correct behavior.
-            # This prevents the invalid config from being generated.
-        else:
-            # For other network types, use the map
-            stream_settings.update(network_map.get(params.network, {}))
-            
-        return stream_settings
-# ---------------------------------------------------------------------------------
-
+# --- Main Application Logic (حالا بدون پچ و کد اضافی) ---
 def main():
     print("--- Starting Refactored Script ---")
     
@@ -142,16 +89,18 @@ def main():
         print(f"Error loading config.json: {e}"); return
 
     print("\n--- Steps 1 & 2: Loading & Pre-processing Configurations ---")
-    # ... (کد این بخش بدون تغییر باقی می‌ماند) ...
     configs_with_uris = [{'params': p, 'original_uri': uri} for uri in Path(INPUT_CONFIGS_PATH).read_text().splitlines() if (p := parse_uri(uri))]
     unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port): item for item in configs_with_uris}.values())
     configs_to_test = [item['params'] for item in unique_items]
+
+    # منطق منحصر به فرد کردن تگ‌ها همچنان لازم است
     seen_tags = set()
     for config in configs_to_test:
         original_tag, count, new_tag = config.tag, 1, config.tag
         while new_tag in seen_tags:
             new_tag = f"{original_tag}_{count}"; count += 1
         config.tag = new_tag; seen_tags.add(new_tag)
+        
     print(f"Found {len(configs_to_test)} unique configurations.")
 
     print("\n--- Step 3: Ensuring Binaries are Ready ---")
@@ -160,6 +109,7 @@ def main():
         downloader = BinaryDownloader(PROJECT_ROOT)
         if not downloader.ensure_binary("core_engine", CORE_ENGINE_PATH, OWN_REPO):
             raise RuntimeError("Failed to download core_engine.")
+        # کد تغییر نام مثل قبل
         generic_path = CORE_ENGINE_PATH / "core_engine"
         if sys.platform == "win32": expected_name = "core_engine.exe"
         elif sys.platform == "darwin": expected_name = "core_engine_macos"
@@ -187,10 +137,8 @@ def main():
         config_param, original_uri = item['params'], item['original_uri']
         print(f"\nProcessing config {i+1}/{len(successful_items)}: {config_param.tag}")
 
-        # ----- Use the Patched Builder -----
-        builder = PatchedXrayConfigBuilder() # <--- از کلاس اصلاح‌شده خودمان استفاده می‌کنیم
-        # -----------------------------------
-        
+        # ----- حالا از XrayConfigBuilder اصلی کتابخانه استفاده می‌کنیم -----
+        builder = XrayConfigBuilder()
         builder.add_inbound({"port": LOCATION_CHECK_PORT, "listen": "127.0.0.1", "protocol": "socks", "settings": {"auth": "noauth", "udp": True}, "tag": "socks_in"})
         outbound = builder.build_outbound_from_params(config_param)
         builder.add_outbound(outbound)
@@ -204,7 +152,6 @@ def main():
                 print(f"  Temporary proxy is running on port {LOCATION_CHECK_PORT}..."); time.sleep(2) 
                 proxies = {"http": f"socks5h://127.0.0.1:{LOCATION_CHECK_PORT}", "https": f"socks5h://127.0.0.1:{LOCATION_CHECK_PORT}"}
                 
-                # ... (منطق CHECK_LOC و CHECK_IRAN بدون تغییر باقی می‌ماند) ...
                 if CHECK_LOC:
                     country_code = fetch_country_code(proxies)
                     exit_ip = get_public_ipv4(proxies)
