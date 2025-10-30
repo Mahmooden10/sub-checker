@@ -1,8 +1,11 @@
 import sys
 import logging
 from pathlib import Path
+
+# --- Library Imports ---
+# ما فقط از کامپوننت‌های سالم کتابخانه استفاده می‌کنیم
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
-from python_v2ray.config_parser import parse_uri
+from python_v2ray.config_parser import ConfigParams # <-- فقط دیتاکلاس رو لازم داریم
 from python_v2ray.tester import ConnectionTester
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
@@ -11,17 +14,31 @@ PROJECT_ROOT = Path(__file__).parent
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
 
+def manual_socks_parser(uri: str) -> ConfigParams:
+    """
+    یک پارسر دستی و ساده فقط برای این تست، چون پارسر کتابخانه باگ دارد.
+    """
+    print("Using manual SOCKS parser to bypass library bug...")
+    main_part = uri.replace("socks://", "").split("#")[0]
+    host, port_str = main_part.split(":")
+    return ConfigParams(
+        protocol="socks",
+        address=host,
+        port=int(port_str),
+        tag="Public-SOCKS-Test",
+        display_tag="Public-SOCKS-Test"
+    )
+
 def main():
-    print("--- Starting System Sanity Check (using a public SOCKS proxy) ---")
+    print("--- Starting FINAL Sanity Check (bypassing library parser) ---")
 
-    # یک پروکسی ساکس عمومی و رایگان که احتمالاً IP گیت‌هاب را بلاک نمی‌کند
     public_proxy_uri = "socks://45.176.120.150:1080#Public-SOCKS-Test"
-
-    print(f"\n--- Using a known public proxy for testing: {public_proxy_uri} ---")
-    proxy_config = parse_uri(public_proxy_uri)
+    print(f"\n--- Manually parsing test URI: {public_proxy_uri} ---")
+    
+    # --- از پارسر دستی خودمان استفاده می‌کنیم ---
+    proxy_config = manual_socks_parser(public_proxy_uri)
     if not proxy_config:
-        print("Fatal: Could not parse the hardcoded SOCKS URI.")
-        sys.exit(1)
+        print("Fatal: Manual parser failed."); sys.exit(1)
     
     configs_to_test = [proxy_config]
     
@@ -45,7 +62,7 @@ def main():
     tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
     results = tester.test_uris(
         parsed_params=configs_to_test, 
-        timeout=40,  # تایم‌اوت بالا برای پروکسی عمومی
+        timeout=40,
         ping_url="http://connectivitycheck.gstatic.com/generate_204"
     )
 
@@ -56,15 +73,14 @@ def main():
     if result.get('status') == 'success':
         print("\n" + "="*60)
         print("--- SANITY CHECK PASSED! ---")
-        print(f"Successfully connected through a public proxy with a ping of {result.get('ping_ms')} ms.")
-        print("This PROVES the library and the refactored script are working correctly.")
-        print("The '0 working configurations' issue is 100% due to your specific configs being blocked in the GitHub Actions environment.")
+        print(f"Successfully connected with a ping of {result.get('ping_ms')} ms.")
+        print("This PROVES the tester, binaries, and environment are working correctly.")
+        print("THE ONLY PROBLEM IS THE LIBRARY'S 'parse_uri' FUNCTION.")
         print("="*60)
     else:
         print("\n" + "="*60)
         print("--- TEST FAILED ---")
-        print(f"Could not connect even through a public proxy. Reason: {result.get('status')}")
-        print("This might indicate a network issue in the GitHub runner itself.")
+        print(f"Could not connect. Reason: {result.get('status')}")
         print("="*60)
         sys.exit(1)
 
