@@ -21,15 +21,19 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 
-      - name: Move Binaries to Vendor Directory
+      - name: Move and Rename Binaries for Compatibility
         run: |
           echo "Restructuring directories for compatibility..."
           mkdir -p vendor
-          mv xray vendor/
-          mv hy2 vendor/
-          echo "Successfully moved binaries."
-          ls -R vendor
-
+          
+          # Move xray executable to the correct location and name
+          mv xray/xray vendor/xray_linux
+          
+          # Move hysteria executable to the correct location and name
+          mv hy2/hysteria vendor/hysteria_linux
+          
+          echo "Successfully moved and renamed binaries. Final structure of 'vendor' directory:"
+          ls -l vendor
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
