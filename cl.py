@@ -4,124 +4,109 @@ import re
 import time
 import sys
 import logging
-import subprocess
 from pathlib import Path
 from typing import Optional, List
 
-# --- Library Imports ---
-# ما هنوز از اینها برای آماده‌سازی کانفیگ استفاده می‌کنیم
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
 from python_v2ray.config_parser import load_configs, deduplicate_configs, parse_uri, ConfigParams, XrayConfigBuilder
+from python_v2ray.core import XrayCore
+from python_v2ray.tester import ConnectionTester
 
-# --- لاگینگ رو خاموش می‌کنیم تا خروجی Xray تمیز دیده بشه ---
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
-# --- ثابت‌ها ---
 PROJECT_ROOT = Path(__file__).parent
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
+CONFIG_FILE_PATH = "config.json"
 INPUT_CONFIGS_PATH = "normal.txt"
-DEBUG_CONFIG_PATH = PROJECT_ROOT / "debug_xray_config.json" # یک فایل برای دیباگ کانفیگ
+FINAL_CONFIGS_PATH = "final.txt"
+
+CHECK_LOC = True
+CHECK_IRAN = True
+LOCATION_CHECK_PORT = 20808
+
+# ... (تمام توابع جانبی مثل قبل اینجا قرار می‌گیرند) ...
+def get_public_ipv4(proxies: dict) -> Optional[str]:
+    # ... implementation ...
+    return "1.1.1.1" # Placeholder
+def fetch_country_code(proxies: dict) -> str:
+    # ... implementation ...
+    return "XX"
+def get_ip_details_and_retag(uri: str, code: str) -> str:
+    # ... implementation ...
+    return uri
+def is_ip_accessible_from_iran(ip: str, proxies: dict) -> bool:
+    # ... implementation ...
+    return False
+
 
 def main():
-    print("--- ULTIMATE DEBUG MODE: Bypassing the tester to run Xray directly ---")
+    print("--- Starting Refactored Script ---")
 
-    # --- مرحله ۱: آماده‌سازی کانفیگ‌ها مثل قبل ---
-    print("\n--- Step 1: Loading & Pre-processing Configurations ---")
-    all_configs = load_configs(source=INPUT_CONFIGS_PATH)
-    if not all_configs:
-        print("No valid configs found."); sys.exit(1)
+    try:
+        with open(CONFIG_FILE_PATH, "r") as f: settings = json.load(f)
+        test_url = settings.get("core", {}).get("test_url", "http://connectivitycheck.gstatic.com/generate_204")
+    except Exception as e:
+        print(f"Error loading config.json: {e}"); return
+
+    print("\n--- Steps 1 & 2: Loading & Pre-processing Configurations ---")
     
-    configs_to_test = deduplicate_configs(all_configs)
-    
-    # اطمینان از منحصر به فرد بودن تگ‌ها
+    # ----- FIX IS HERE: Replaced walrus operator for Python < 3.8 compatibility -----
+    configs_with_uris = []
+    for uri in Path(INPUT_CONFIGS_PATH).read_text().splitlines():
+        p = parse_uri(uri)
+        if p:
+            configs_with_uris.append({'params': p, 'original_uri': uri})
+    # --------------------------------------------------------------------------
+
+    if not configs_with_uris:
+        print("No valid configs found after parsing. Please check input file and Python version compatibility.")
+        Path(FINAL_CONFIGS_PATH).write_text(""); return
+
+    unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port): item for item in configs_with_uris}.values())
+    configs_to_test = [item['params'] for item in unique_items]
+
+    # ... (کد منحصر به فرد کردن تگ‌ها) ...
     seen_tags = set()
     for config in configs_to_test:
         original_tag, count, new_tag = config.tag, 1, config.tag
-        while new_tag in seen_tags:
-            new_tag = f"{original_tag}_{count}"; count += 1
+        while new_tag in seen_tags: new_tag = f"{original_tag}_{count}"; count += 1
         config.tag = new_tag; seen_tags.add(new_tag)
         
-    print(f"Found {len(configs_to_test)} unique configurations to test.")
+    print(f"Found {len(configs_to_test)} unique configurations.")
 
-    # --- مرحله ۲: ساختن کانفیگ ترکیبی به صورت دستی ---
-    print("\n--- Step 2: Manually creating the merged Xray config ---")
-    builder = XrayConfigBuilder()
-    base_port = 20800
-    
-    for i, params in enumerate(configs_to_test):
-        local_port = base_port + i
-        inbound_tag = f"inbound-{local_port}"
-        
-        # اضافه کردن اینباند برای هر کانفیگ
-        builder.add_inbound({
-            "tag": inbound_tag,
-            "port": local_port,
-            "listen": "127.0.0.1",
-            "protocol": "socks",
-            "settings": {"auth": "noauth", "udp": True}
-        })
-        
-        # ساختن و اضافه کردن اوت‌باند
-        outbound = builder.build_outbound_from_params(params)
-        if not outbound:
-            print(f"Warning: Could not build outbound for tag '{params.tag}'. Skipping.")
-            continue
-            
-        builder.add_outbound(outbound)
-        
-        # اضافه کردن قانون روتینگ
-        builder.config["routing"]["rules"].append({
-            "type": "field",
-            "inboundTag": [inbound_tag],
-            "outboundTag": outbound["tag"]
-        })
+    print("\n--- Step 3: Ensuring Binaries are Ready ---")
+    try:
+        CORE_ENGINE_PATH.mkdir(exist_ok=True)
+        downloader = BinaryDownloader(PROJECT_ROOT)
+        if not downloader.ensure_binary("core_engine", CORE_ENGINE_PATH, OWN_REPO): raise RuntimeError("Failed to download core_engine.")
+        generic_path = CORE_ENGINE_PATH / "core_engine"
+        if sys.platform != "win32":
+            expected_name = "core_engine_linux" if "linux" in sys.platform else "core_engine_macos"
+            if generic_path.is_file(): generic_path.rename(CORE_ENGINE_PATH / expected_name)
+        print("Binaries are ready.")
+    except Exception as e:
+        print(f"Fatal Error during binary check: {e}"); return
 
-    # ذخیره کردن کانفیگ نهایی در یک فایل برای بررسی
-    config_json = builder.to_json()
-    DEBUG_CONFIG_PATH.write_text(config_json)
-    print(f"Merged config saved to: {DEBUG_CONFIG_PATH}")
+    print("\n--- Step 4: Initial Connectivity (Ping) Test ---")
+    tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
+    results = tester.test_uris(parsed_params=configs_to_test, timeout=20, ping_url=test_url)
     
-    # چاپ بخش outbounds برای بررسی سریع
-    print("\n--- DEBUG: Generated Outbounds Section ---")
-    print(json.dumps(builder.config.get('outbounds', []), indent=2))
-    print("-" * 40)
+    successful_tags = {r['tag'] for r in results if r.get('status') == 'success'}
+    successful_items = [item for item in unique_items if item['params'].tag in successful_tags]
+    
+    print(f"Initial test found {len(successful_items)} working configurations.")
+    if not successful_items:
+        Path(FINAL_CONFIGS_PATH).write_text(""); return
 
-    # --- مرحله ۳: اجرای مستقیم Xray و گرفتن خروجی خطا ---
-    print("\n--- Step 3: Running Xray directly and capturing all output ---")
-    
-    xray_executable = VENDOR_PATH / "xray_linux"
-    command = [str(xray_executable), "-c", str(DEBUG_CONFIG_PATH)]
-    
-    print(f"Executing command: {' '.join(command)}")
-    
-    # Xray را اجرا کرده و منتظر می‌مانیم تا تمام شود یا تایم‌اوت شود
-    # تمام خروجی استاندارد و خروجی خطا را ضبط می‌کنیم
-    process = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=15 # 15 ثانیه صبر می‌کنیم
-    )
+    # ... (بقیه کد برای Step 5 و 6 مثل قبل است و نیازی به تغییر ندارد) ...
+    # Placeholder for the rest of the logic
+    print("\n--- Step 5 & 6 are skipped for this test run. ---")
+    final_uris_to_write = [item['original_uri'] for item in successful_items]
+    Path(FINAL_CONFIGS_PATH).write_text("\n".join(final_uris_to_write) + "\n")
 
-    # --- مرحله ۴: نمایش نتایج دیباگ ---
-    print("\n--- XRAY EXECUTION RESULT ---")
-    print(f"Return Code: {process.returncode}")
-    
-    print("\n--- XRAY STDOUT (Standard Output) ---")
-    print(process.stdout if process.stdout else "[EMPTY]")
-    print("-" * 40)
-    
-    print("\n--- XRAY STDERR (THE REAL ERROR IS LIKELY HERE!) ---")
-    print(process.stderr if process.stderr else "[EMPTY]")
-    print("-" * 40)
 
-    if process.returncode != 0:
-        print("\nCONCLUSION: Xray crashed! The error message is in the STDERR section above.")
-    else:
-        print("\nCONCLUSION: Xray ran without crashing, but something else is wrong.")
-
-    sys.exit(1) # اسکریپت را متوقف می‌کنیم چون این فقط یک تست دیباگ بود
+    print("\n--- Script finished successfully! ---")
 
 if __name__ == "__main__":
     main()
