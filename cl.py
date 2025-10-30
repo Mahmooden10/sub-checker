@@ -131,7 +131,7 @@ def main():
         builder.config["routing"]["rules"].append({"type": "field", "inboundTag": ["socks_in"], "outboundTag": outbound.get("tag", "proxy")})
 
         try:
-            with XrayCore(vendor_dir=str(VENDOR_PATH), config_builder=builder) as xray:
+            with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder) as xray:
                 if not xray.is_running():
                     print("  [FAIL] Xray process failed to start. Likely a config build issue."); continue
                 
