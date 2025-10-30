@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-# --- Library Imports ---
+
 from python_v2ray.downloader import BinaryDownloader, OWN_REPO
 from python_v2ray.config_parser import load_configs, deduplicate_configs, parse_uri, ConfigParams, XrayConfigBuilder
 from python_v2ray.core import XrayCore
@@ -15,7 +15,6 @@ from python_v2ray.tester import ConnectionTester
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
-# --- Project Constants & Flags ---
 PROJECT_ROOT = Path(__file__).parent
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
@@ -25,29 +24,38 @@ FINAL_CONFIGS_PATH = "final.txt"
 
 CHECK_LOC = True
 CHECK_IRAN = True
-SINGLE_TEST_PORT = 20808 # یک پورت ثابت برای تمام تست‌های تکی
+LOCATION_CHECK_PORT = 20808
 
-# --- Helper Functions (بدون تغییر) ---
 def get_public_ipv4(proxies: dict) -> Optional[str]:
+    """Fetches the public IPv4 address using a given proxy."""
     urls = ["https://api.ipify.org", "https://icanhazip.com"]
     for url in urls:
         try:
-            r = requests.get(url, timeout=10, proxies=proxies); r.raise_for_status()
+            r = requests.get(url, timeout=10, proxies=proxies)
+            r.raise_for_status()
             ip = r.text.strip()
             if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
-                print(f"  Successfully fetched exit IP: {ip}"); return ip
-        except requests.RequestException: continue
-    print("  Error: Failed to fetch public IPv4."); return None
+                print(f"  Successfully fetched exit IP: {ip}")
+                return ip
+        except requests.RequestException:
+            continue
+    print("  Error: Failed to fetch public IPv4.")
+    return None
 
 def fetch_country_code(proxies: dict) -> str:
+    """Fetches the exit country code using the provided proxy."""
     try:
-        r = requests.get("https://ipinfo.io/json", timeout=10, proxies=proxies); r.raise_for_status()
+        r = requests.get("https://ipinfo.io/json", timeout=10, proxies=proxies)
+        r.raise_for_status()
         country = r.json().get('country', 'XX')
-        print(f"  Successfully fetched country code: {country}"); return country
+        print(f"  Successfully fetched country code: {country}")
+        return country
     except Exception:
-        print("  Warning: Could not fetch country code."); return "XX"
+        print("  Warning: Could not fetch country code.")
+        return "XX"
 
 def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
+    """Rewrites the tag of a config string to include the country code."""
     parts = original_uri.strip().split("#", 1)
     base = parts[0]
     p = parse_uri(original_uri)
@@ -56,43 +64,32 @@ def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
     return f"{base}#{base_name}::{country_code}"
 
 def is_ip_accessible_from_iran(ip: str, proxies: dict) -> bool:
+    """Checks if an IP is accessible from Iran. Returns False if accessible, True if filtered."""
     if not ip: return True
     print(f"  CHECK-HOST: Checking accessibility of {ip} from Iran...")
     try:
         url = f"https://check-host.net/check-ping?host={ip}&node=ir1.node.check-host.net,ir2.node.check-host.net,ir3.node.check-host.net"
         init = requests.get(url, headers={"Accept": "application/json"}, timeout=15, proxies=proxies).json()
         req_id = init.get("request_id")
-        if not req_id: return False
+        if not req_id:
+            print("  CHECK-HOST Warning: Could not get request_id. Assuming accessible.")
+            return False
         time.sleep(10)
         res_url = f"https://check-host.net/check-result/{req_id}"
         results = requests.get(res_url, headers={"Accept": "application/json"}, timeout=15, proxies=proxies).json()
         for node in ["ir1.node.check-host.net", "ir2.node.check-host.net", "ir3.node.check-host.net"]:
             if results.get(node) and "ms" in str(results[node][0]):
-                print(f"  CHECK-HOST OK: {ip} is ACCESSIBLE from {node}."); return False
-        print(f"  CHECK-HOST Filtered: {ip} is INACCESSIBLE."); return True
+                print(f"  CHECK-HOST OK: {ip} is ACCESSIBLE from {node}.")
+                return False
+        print(f"  CHECK-HOST Filtered: {ip} is INACCESSIBLE.")
+        return True
     except Exception as e:
-        print(f"  CHECK-HOST Warning: Service failed ({e}). Assuming accessible."); return False
-
-# ----- Patched Builder to fix library bugs -----
-class PatchedXrayConfigBuilder(XrayConfigBuilder):
-    def _build_protocol_settings(self, params: ConfigParams) -> Dict[str, Any]:
-        settings = super()._build_protocol_settings(params)
-        if not settings and params.protocol == "socks":
-            print("  [PATCH] Applying fix for 'socks' protocol...")
-            return {"servers": [{"address": params.address, "port": params.port}]}
-        return settings
-    
-    def _build_stream_settings(self, params: ConfigParams, **kwargs) -> Dict[str, Any]:
-        stream_settings = super()._build_stream_settings(params, **kwargs)
-        if params.network == "grpc" and not stream_settings.get("grpcSettings", {}).get("serviceName"):
-            print(f"  [PATCH] Removing invalid grpcSettings for '{params.tag}' to prevent crash.")
-            if "grpcSettings" in stream_settings:
-                del stream_settings["grpcSettings"]
-        return stream_settings
+        print(f"  CHECK-HOST Warning: Service failed ({e}). Assuming accessible to be safe.")
+        return False
 
 def main():
-    print("--- Starting Refactored Script (Single-Test Mode) ---")
-    
+    print("--- Starting Refactored Script (using Merged Test) ---")
+
     try:
         with open(CONFIG_FILE_PATH, "r") as f: settings = json.load(f)
         test_url = settings.get("core", {}).get("test_url", "http://connectivitycheck.gstatic.com/generate_204")
@@ -100,9 +97,26 @@ def main():
         print(f"Error loading config.json: {e}"); return
 
     print("\n--- Steps 1 & 2: Loading & Pre-processing Configurations ---")
-    configs_with_uris = [{'params': p, 'original_uri': uri} for uri in Path(INPUT_CONFIGS_PATH).read_text().splitlines() if (p := parse_uri(uri))]
+    configs_with_uris = []
+    for uri in Path(INPUT_CONFIGS_PATH).read_text().splitlines():
+        p = parse_uri(uri)
+        if p:
+            configs_with_uris.append({'params': p, 'original_uri': uri})
+
+    if not configs_with_uris:
+        print("No valid configs found after parsing."); Path(FINAL_CONFIGS_PATH).write_text(""); return
+
     unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port): item for item in configs_with_uris}.values())
-    print(f"Found {len(unique_items)} unique configurations.")
+    configs_to_test = [item['params'] for item in unique_items]
+
+    seen_tags = set()
+    for config in configs_to_test:
+        original_tag, count, new_tag = config.display_tag, 1, config.display_tag
+        while new_tag in seen_tags:
+            new_tag = f"{original_tag}_{count}"; count += 1
+        config.tag = new_tag; config.display_tag = new_tag; seen_tags.add(new_tag)
+
+    print(f"Found {len(configs_to_test)} unique configurations.")
 
     print("\n--- Step 3: Ensuring Binaries are Ready ---")
     try:
@@ -117,15 +131,33 @@ def main():
     except Exception as e:
         print(f"Fatal Error during binary check: {e}"); return
 
-    print("\n--- Step 4 & 5: Single-threaded Testing and Filtering ---")
-    final_uris_to_write = []
-    
-    for i, item in enumerate(unique_items):
-        config_param, original_uri = item['params'], item['original_uri']
-        print(f"\n[{i+1}/{len(unique_items)}] Testing: {config_param.display_tag}")
+    print("\n--- Step 4: Initial Connectivity (Merged Ping Test) ---")
+    tester = ConnectionTester(vendor_path=str(VENDOR_PATH), core_engine_path=str(CORE_ENGINE_PATH))
+    results = tester.test_uris(parsed_params=configs_to_test, timeout=30, ping_url=test_url, debug_mode=True)
 
-        builder = PatchedXrayConfigBuilder()
-        builder.add_inbound({"port": SINGLE_TEST_PORT, "listen": "127.0.0.1", "protocol": "socks", "tag": "socks_in"})
+    successful_tags = {r['tag'] for r in results if r.get('status') == 'success'}
+    successful_items = [item for item in unique_items if item['params'].tag in successful_tags]
+
+    print("\n--- Initial Test Results Summary ---")
+    for res in results:
+        status = "SUCCESS" if res.get('status') == 'success' else "FAILED"
+        ping_info = f"Ping: {res.get('ping_ms')} ms" if status == "SUCCESS" else f"Reason: {res.get('status')}"
+        print(f"  [{status}] Tag: {res.get('tag'):<40} | {ping_info}")
+    print("-" * 60)
+
+    print(f"Initial test found {len(successful_items)} working configurations.")
+    if not successful_items:
+        Path(FINAL_CONFIGS_PATH).write_text(""); return
+
+    print("\n--- Step 5: Location & Iran Accessibility Check ---")
+    final_uris_to_write = []
+
+    for i, item in enumerate(successful_items):
+        config_param, original_uri = item['params'], item['original_uri']
+        print(f"\n[{i+1}/{len(successful_items)}] Checking location for: {config_param.display_tag}")
+
+        builder = XrayConfigBuilder()
+        builder.add_inbound({"port": LOCATION_CHECK_PORT, "listen": "127.0.0.1", "protocol": "socks", "tag": "socks_in"})
         outbound = builder.build_outbound_from_params(config_param)
         builder.add_outbound(outbound)
         builder.config["routing"]["rules"].append({"type": "field", "inboundTag": ["socks_in"], "outboundTag": outbound.get("tag", "proxy")})
@@ -133,17 +165,10 @@ def main():
         try:
             with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder) as xray:
                 if not xray.is_running():
-                    print("  [FAIL] Xray process failed to start. Likely a config build issue."); continue
-                
-                print(f"  Proxy is running on port {SINGLE_TEST_PORT}. Pinging...")
+                    print("  [FAIL] Could not start temporary proxy for location check."); continue
+
                 time.sleep(2)
-                
-                proxies = {"http": f"socks5h://127.0.0.1:{SINGLE_TEST_PORT}", "https": f"socks5h://127.0.0.1:{SINGLE_TEST_PORT}"}
-                start_time = time.time()
-                response = requests.get(test_url, proxies=proxies, timeout=15)
-                response.raise_for_status()
-                ping_ms = int((time.time() - start_time) * 1000)
-                print(f"  [SUCCESS] Ping: {ping_ms} ms. Proceeding to location checks...")
+                proxies = {"http": f"socks5h://127.0.0.1:{LOCATION_CHECK_PORT}", "https": f"socks5h://127.0.0.1:{LOCATION_CHECK_PORT}"}
 
                 if CHECK_LOC:
                     country_code = fetch_country_code(proxies)
@@ -164,7 +189,7 @@ def main():
                     print("  [ADDED] No extra checks required.")
 
         except Exception as e:
-            print(f"  [FAIL] Test failed for this config. Reason: {e}")
+            print(f"  [FAIL] An error occurred during location check: {e}")
 
     print(f"\n--- Step 6: Writing {len(final_uris_to_write)} Final Configurations ---")
     Path(FINAL_CONFIGS_PATH).write_text("\n".join(final_uris_to_write) + "\n")
