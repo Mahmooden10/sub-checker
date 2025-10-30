@@ -17,26 +17,6 @@ from python_v2ray.core import XrayCore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
-class DebugXrayCore(XrayCore):
-    """An XrayCore subclass that prints Xray's output directly for debugging."""
-    def start(self) -> None:
-        if self.is_running():
-            logging.info(f"{self.__class__.__name__} is already running.")
-            return
-
-        self._create_config()
-        command = self._get_start_command()
-
-        logging.info(f"Starting {self.__class__.__name__} with command: {' '.join(command)}")
-        try:
-            self.process = subprocess.Popen(command, text=True, encoding='utf-8')
-            logging.info(f"{self.__class__.__name__} started successfully with PID: {self.process.pid}")
-        except Exception as e:
-            logging.error(f"Failed to start {self.__class__.__name__}: {e}")
-            self.process = None
-            self._cleanup_config()
-
-
 PROJECT_ROOT = Path(__file__).parent.resolve()
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
@@ -148,7 +128,7 @@ def main():
     for uri in all_uris:
         p = parse_uri(uri)
         if p: configs_with_uris.append({'params': p, 'original_uri': uri})
-    unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port): item for item in configs_with_uris}.values())
+    unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port, item['params'].id): item for item in configs_with_uris}.values())
     print(f"Found {len(unique_items)} unique configurations.")
 
     if not os.environ.get('CI'):
@@ -167,17 +147,24 @@ def main():
     base_port = 20800
     expected_ports = set()
     items_to_test = []
-    for i, item in enumerate(unique_items):
-        outbound = builder.build_outbound_from_params(item['params'])
-        if outbound:
+    for item in unique_items:
+        # We only care about Xray-compatible protocols here
+        if item['params'].protocol in ["vless", "vmess", "trojan", "ss", "socks", "mvless"]:
             local_port = base_port + len(items_to_test)
-            item['local_port'] = local_port
-            items_to_test.append(item)
-            expected_ports.add(local_port)
 
-            builder.add_inbound({"port": local_port, "listen": "127.0.0.1", "protocol": "socks", "tag": f"inbound-{local_port}"})
-            builder.add_outbound(outbound)
-            builder.config["routing"]["rules"].append({"type": "field", "inboundTag": [f"inbound-{local_port}"], "outboundTag": outbound.get("tag", "proxy")})
+            # <<< THE MAIN FIX: Generate a guaranteed unique tag for Xray >>>
+            unique_outbound_tag = f"proxy_out_{local_port}"
+            outbound = builder.build_outbound_from_params(item['params'], explicit_tag=unique_outbound_tag)
+
+            if outbound:
+                item['local_port'] = local_port
+                items_to_test.append(item)
+                expected_ports.add(local_port)
+
+                builder.add_inbound({"port": local_port, "listen": "127.0.0.1", "protocol": "socks", "tag": f"inbound-{local_port}"})
+                builder.add_outbound(outbound)
+                # Use the new unique tag for the routing rule
+                builder.config["routing"]["rules"].append({"type": "field", "inboundTag": [f"inbound-{local_port}"], "outboundTag": unique_outbound_tag})
 
     if not items_to_test:
         print("No Xray-compatible configurations found to test.")
@@ -185,13 +172,18 @@ def main():
 
     final_uris_to_write = []
     try:
-        with DebugXrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
-            print(f"\n--- Xray is running with {len(items_to_test)} proxies. Waiting for all ports to become ready... ---")
+        # Using the standard XrayCore now, no need for debug class
+        with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
+            time.sleep(1) # Give Xray a moment to start
+            if not xray.is_running():
+                raise RuntimeError("Xray process failed to start. The config might still have issues.")
+
+            print(f"\n--- Xray is running with {len(items_to_test)} proxies. Waiting for ports... ---")
 
             ready_ports = set()
-            for _ in range(40):
+            for _ in range(40): # 10 seconds timeout
                 if not xray.is_running():
-                    print("\n--- XRAY CRASHED! See logs above for the reason. ---")
+                    print("\n--- XRAY CRASHED! ---")
                     break
                 ports_to_check = expected_ports - ready_ports
                 for port in ports_to_check:
@@ -206,13 +198,13 @@ def main():
                 time.sleep(0.25)
             else:
                 if xray.is_running():
-                    raise RuntimeError(f"Timeout: Not all proxy ports became ready. {len(ready_ports)}/{len(expected_ports)} ready. Xray is still running but not listening.")
+                     raise RuntimeError(f"Timeout: Not all ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
                 else:
-                    raise RuntimeError("Xray crashed during the port check. Check the logs above.")
+                    raise RuntimeError("Xray crashed during port check.")
 
             if not ready_ports:
-                print("\n--- No ports became ready. Aborting tests. ---")
-                return
+                 print("\n--- No ports became ready. Aborting tests. ---")
+                 return
 
             print("\n--- Starting all checks concurrently ---")
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
