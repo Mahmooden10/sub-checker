@@ -5,6 +5,8 @@ import time
 import sys
 import logging
 import socket
+import os
+import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,6 +16,26 @@ from python_v2ray.config_parser import parse_uri, XrayConfigBuilder
 from python_v2ray.core import XrayCore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
+
+class DebugXrayCore(XrayCore):
+    """An XrayCore subclass that prints Xray's output directly for debugging."""
+    def start(self) -> None:
+        if self.is_running():
+            logging.info(f"{self.__class__.__name__} is already running.")
+            return
+
+        self._create_config()
+        command = self._get_start_command()
+
+        logging.info(f"Starting {self.__class__.__name__} with command: {' '.join(command)}")
+        try:
+            self.process = subprocess.Popen(command, text=True, encoding='utf-8')
+            logging.info(f"{self.__class__.__name__} started successfully with PID: {self.process.pid}")
+        except Exception as e:
+            logging.error(f"Failed to start {self.__class__.__name__}: {e}")
+            self.process = None
+            self._cleanup_config()
+
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 VENDOR_PATH = PROJECT_ROOT / "vendor"
@@ -129,11 +151,17 @@ def main():
     unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port): item for item in configs_with_uris}.values())
     print(f"Found {len(unique_items)} unique configurations.")
 
-    try:
-        downloader = BinaryDownloader(PROJECT_ROOT); downloader.ensure_all()
-        print("Binaries are ready.")
-    except Exception as e:
-        print(f"Fatal Error during binary check: {e}"); return
+    if not os.environ.get('CI'):
+        print("--- Local environment detected. Checking/downloading binaries... ---")
+        try:
+            downloader = BinaryDownloader(PROJECT_ROOT)
+            downloader.ensure_all()
+            print("Binaries are ready.")
+        except Exception as e:
+            print(f"Fatal Error during binary check: {e}")
+            return
+    else:
+        print("--- CI environment detected. Skipping automatic binary download. ---")
 
     builder = XrayConfigBuilder()
     base_port = 20800
@@ -157,19 +185,14 @@ def main():
 
     final_uris_to_write = []
     try:
-        with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
-            time.sleep(0.5)
-            if not xray.is_running():
-
-                stderr_output = ""
-                if xray.process and xray.process.stderr:
-                    stderr_output = xray.process.stderr.read().decode('utf-8', errors='ignore')
-                raise RuntimeError(f"Xray process failed to start or crashed. Error: {stderr_output}")
-
+        with DebugXrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
             print(f"\n--- Xray is running with {len(items_to_test)} proxies. Waiting for all ports to become ready... ---")
 
             ready_ports = set()
-            for _ in range(40): # Wait for 10 seconds total
+            for _ in range(40):
+                if not xray.is_running():
+                    print("\n--- XRAY CRASHED! See logs above for the reason. ---")
+                    break
                 ports_to_check = expected_ports - ready_ports
                 for port in ports_to_check:
                     try:
@@ -182,7 +205,14 @@ def main():
                     break
                 time.sleep(0.25)
             else:
-                raise RuntimeError(f"Timeout: Not all proxy ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
+                if xray.is_running():
+                    raise RuntimeError(f"Timeout: Not all proxy ports became ready. {len(ready_ports)}/{len(expected_ports)} ready. Xray is still running but not listening.")
+                else:
+                    raise RuntimeError("Xray crashed during the port check. Check the logs above.")
+
+            if not ready_ports:
+                print("\n--- No ports became ready. Aborting tests. ---")
+                return
 
             print("\n--- Starting all checks concurrently ---")
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -192,11 +222,12 @@ def main():
                         final_uris_to_write.append(result_uri)
 
     except Exception as e:
-        logging.critical(f"A critical error occurred: {e}", exc_info=True)
+        logging.critical(f"A critical error occurred: {e}", exc_info=False)
 
-    print(f"\n--- Step 6: Writing {len(final_uris_to_write)} Final Configurations ---")
-    Path(FINAL_CONFIGS_PATH).write_text("\n".join(final_uris_to_write) + "\n")
-    print("\n--- Script finished successfully! ---")
+    finally:
+        print(f"\n--- Writing {len(final_uris_to_write)} Final Configurations ---")
+        Path(FINAL_CONFIGS_PATH).write_text("\n".join(final_uris_to_write) + "\n")
+        print("\n--- Script finished successfully! ---")
 
 if __name__ == "__main__":
     main()
