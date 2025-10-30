@@ -32,6 +32,7 @@ CHECK_HOST_IRANIAN_NODES = [
     "ir1.node.check-host.net", "ir2.node.check-host.net", "ir3.node.check-host.net"
 ]
 
+
 def get_public_ipv4(proxies: dict) -> Optional[str]:
     urls = ["https://api.ipify.org", "https://icanhazip.com"]
     for url in urls:
@@ -43,6 +44,7 @@ def get_public_ipv4(proxies: dict) -> Optional[str]:
         except requests.RequestException: continue
     logging.error("  Failed to fetch public IPv4."); return None
 
+
 def fetch_country_code(proxies: dict) -> str:
     try:
         r = requests.get("https://ipinfo.io/json", timeout=10, proxies=proxies); r.raise_for_status()
@@ -50,6 +52,7 @@ def fetch_country_code(proxies: dict) -> str:
         logging.info(f"  Successfully fetched country code: {country}"); return country
     except Exception:
         logging.warning("  Could not fetch country code."); return "XX"
+
 
 def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
     parts = original_uri.strip().split("#", 1)
@@ -59,35 +62,101 @@ def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
     base_name = p.display_tag.split("::")[0].strip()
     return f"{base}#{base_name}::{country_code}"
 
-def is_ip_accessible_from_iran(ip_to_check: str, proxies_to_use: dict) -> bool:
-    if not ip_to_check: return True
-    logging.info(f"CHECK-HOST: Checking Iran PING for target IP {ip_to_check}")
-    accessible_from_at_least_one_node = False
-    for node in CHECK_HOST_IRANIAN_NODES:
-        try:
-            init_url = f"https://check-host.net/check-ping?host={ip_to_check}&node={node}&max_nodes=1"
-            response_init = requests.get(init_url, headers={"Accept": "application/json"}, timeout=10, proxies=proxies_to_use)
-            if response_init.status_code != 200: continue
-            init_data = response_init.json()
-            if init_data.get("ok") != 1: continue
-            request_id = init_data.get("request_id")
-            if not request_id: continue
-            time.sleep(10)
-            result_url = f"https://check-host.net/check-result/{request_id}"
-            response_result = requests.get(result_url, headers={"Accept": "application/json"}, timeout=10, proxies=proxies_to_use)
-            if response_result.status_code != 200: continue
-            result_data = response_result.json()
-            if result_data and result_data.get(node) and "ms" in str(result_data[node][0]):
-                logging.info(f"  CHECK-HOST OK: Target IP {ip_to_check} ACCESSIBLE from Iran via {node}.")
-                accessible_from_at_least_one_node = True
-                break
-        except Exception as e:
-            logging.warning(f"  CHECK-HOST: An error occurred while checking node {node}: {e}")
-            continue
-    if accessible_from_at_least_one_node: return False
-    else:
-        logging.warning(f"  CHECK-HOST Filtered: Target IP {ip_to_check} INACCESSIBLE from all Iranian nodes.")
+
+def is_ip_accessible_from_iran_via_check_host(ip_to_check_on_checkhost: str,
+proxies_to_use: Optional[dict],
+timeout_seconds: int = 35) -> Optional[bool]:
+    """
+    Checks if an IP address is pingable from Iran using check-host.net.
+    Returns:
+        False: If accessible from Iran.
+        True: If inaccessible from Iran.
+        None: If the check-host.net service had an issue.
+    """
+    if not ip_to_check_on_checkhost:
+        logging.warning(f"  CHECK-HOST: No target IP provided to check.")
         return True
+    proxy_display = proxies_to_use.get('http', 'None') if proxies_to_use else 'None'
+    logging.info(f"  CHECK-HOST (via proxy {proxy_display}): Checking Iran PING for target IP {ip_to_check_on_checkhost}")
+    check_host_api_url_base = "https://check-host.net/check-ping"
+    headers = {"Accept": "application/json", "User-Agent": "MyConfigTester/1.2"}
+    accessible_from_at_least_one_node = False
+    any_node_test_completed_without_service_error = False
+
+    for node_idx, node in enumerate(CHECK_HOST_IRANIAN_NODES):
+        if accessible_from_at_least_one_node:
+            break
+        try:
+            init_url = f"{check_host_api_url_base}?host={ip_to_check_on_checkhost}&node={node}&max_nodes=1"
+            response_init = requests.get(init_url, headers=headers, timeout=10, proxies=proxies_to_use)
+            if response_init.status_code == 429:
+                logging.warning(f"  CH_PROXY: Rate limited by check-host.net for {ip_to_check_on_checkhost} (node {node}).")
+                return None
+            response_init.raise_for_status()
+            init_data = response_init.json()
+            if init_data.get("ok") != 1:
+                error_msg = init_data.get('error', 'Unknown error')
+                logging.warning(f"  CH_PROXY: PING init API error for {ip_to_check_on_checkhost} (node {node}): {error_msg}")
+                if "limit for your ip" in error_msg.lower() or "many requests" in error_msg.lower():
+                    return None
+                any_node_test_completed_without_service_error = True
+                continue
+
+            request_id = init_data.get("request_id")
+            if not request_id:
+                logging.warning(f"  CH_PROXY: No request_id for {ip_to_check_on_checkhost} (node {node}).")
+                any_node_test_completed_without_service_error = True
+                continue
+
+            result_url = f"https://check-host.net/check-result/{request_id}"
+            polling_deadline = time.time() + (timeout_seconds - 10)
+            node_ping_to_target_successful = False
+            while time.time() < polling_deadline:
+                time.sleep(3)
+                try:
+                    response_result = requests.get(result_url, headers=headers, timeout=5, proxies=proxies_to_use)
+                    if response_result.status_code == 429:
+                        logging.warning(f"  CH_PROXY: Rate limited during polling for {request_id} (node {node}).")
+                        return None
+                    response_result.raise_for_status()
+                    result_data = response_result.json()
+                    if not result_data: continue
+
+                    node_result = result_data.get(node)
+                    if node_result:
+                        any_node_test_completed_without_service_error = True
+                        if isinstance(node_result, list) and len(node_result) > 0 and node_result[0]:
+                            if isinstance(node_result[0], list) and len(node_result[0]) > 0 and node_result[0][0]:
+                                ping_stats = node_result[0][0]
+                                if isinstance(ping_stats, list) and len(ping_stats) >= 4:
+                                    avg_rtt = ping_stats[3]
+                                    if avg_rtt is not None and "ms" in avg_rtt:
+                                        logging.info(f"  CH_PROXY: OK! Target {ip_to_check_on_checkhost} ACCESSIBLE from {node} (RTT: {avg_rtt}).")
+                                        accessible_from_at_least_one_node = True
+                                        node_ping_to_target_successful = True
+                                        break
+                        break
+                except requests.RequestException as e_poll:
+                    logging.error(f"  CH_PROXY: RequestException polling {request_id} ({node}): {e_poll}")
+                    return None
+            if node_ping_to_target_successful:
+                break
+        except requests.RequestException as e_init:
+            logging.error(f"  CH_PROXY: RequestException initiating PING for {ip_to_check_on_checkhost} ({node}): {e_init}")
+            if node_idx == 0: return None
+        except Exception as e_init_other:
+            logging.error(f"  CH_PROXY: Generic error initiating PING for {ip_to_check_on_checkhost} ({node}): {e_init_other}")
+            if node_idx == 0: return None
+
+    if accessible_from_at_least_one_node:
+        return False
+    if any_node_test_completed_without_service_error:
+        logging.info(f"  CH_PROXY: OK! Target {ip_to_check_on_checkhost} INACCESSIBLE from Iran.")
+        return True
+    else:
+        logging.warning(f"  CH_PROXY: Could not get a conclusive result for {ip_to_check_on_checkhost}.")
+        return None
+
 
 def check_one_proxy(item: dict, test_url: str) -> Optional[str]:
     config_param, original_uri, local_port = item['params'], item['original_uri'], item['local_port']
@@ -98,22 +167,29 @@ def check_one_proxy(item: dict, test_url: str) -> Optional[str]:
         response = requests.get(test_url, proxies=proxies, timeout=20); response.raise_for_status()
         ping_ms = int((time.time() - start_time) * 1000)
         logging.info(f"  [SUCCESS] Ping: {ping_ms} ms for {config_param.display_tag}.")
+
+        exit_ip = get_public_ipv4(proxies)
+
+        if CHECK_IRAN:
+            is_inaccessible_from_iran = is_ip_accessible_from_iran_via_check_host(exit_ip, proxies)
+            if is_inaccessible_from_iran is False:  # False means it IS accessible
+                logging.warning(f"  [FILTERED] {config_param.display_tag} is accessible from Iran and has been removed.")
+                return None
+            if is_inaccessible_from_iran is None: # Inconclusive check
+                logging.warning(f"  [WARNING] Iran accessibility check for {config_param.display_tag} was inconclusive. Allowing it to pass.")
+
         if CHECK_LOC:
             country_code = fetch_country_code(proxies)
-            exit_ip = get_public_ipv4(proxies)
-            if CHECK_IRAN and is_ip_accessible_from_iran(exit_ip, proxies): return None
             final_uri = get_ip_details_and_retag(original_uri, country_code)
             logging.info(f"  [ADDED] {config_param.display_tag} passed all checks.")
             return final_uri
-        elif CHECK_IRAN:
-            exit_ip = get_public_ipv4(proxies)
-            if is_ip_accessible_from_iran(exit_ip, proxies): return None
-            return original_uri
         else:
             return original_uri
+
     except Exception as e:
         logging.error(f"  [FAIL] Test failed for {config_param.display_tag}. Reason: {str(e)[:120]}")
         return None
+
 
 def main():
     print("--- Starting Fully Concurrent Refactored Script ---")
@@ -148,11 +224,8 @@ def main():
     expected_ports = set()
     items_to_test = []
     for item in unique_items:
-        # We only care about Xray-compatible protocols here
         if item['params'].protocol in ["vless", "vmess", "trojan", "ss", "socks", "mvless"]:
             local_port = base_port + len(items_to_test)
-
-            # <<< THE MAIN FIX: Generate a guaranteed unique tag for Xray >>>
             unique_outbound_tag = f"proxy_out_{local_port}"
             outbound = builder.build_outbound_from_params(item['params'], explicit_tag=unique_outbound_tag)
 
@@ -163,7 +236,6 @@ def main():
 
                 builder.add_inbound({"port": local_port, "listen": "127.0.0.1", "protocol": "socks", "tag": f"inbound-{local_port}"})
                 builder.add_outbound(outbound)
-                # Use the new unique tag for the routing rule
                 builder.config["routing"]["rules"].append({"type": "field", "inboundTag": [f"inbound-{local_port}"], "outboundTag": unique_outbound_tag})
 
     if not items_to_test:
@@ -172,16 +244,15 @@ def main():
 
     final_uris_to_write = []
     try:
-        # Using the standard XrayCore now, no need for debug class
         with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
-            time.sleep(1) # Give Xray a moment to start
+            time.sleep(1)
             if not xray.is_running():
                 raise RuntimeError("Xray process failed to start. The config might still have issues.")
 
             print(f"\n--- Xray is running with {len(items_to_test)} proxies. Waiting for ports... ---")
 
             ready_ports = set()
-            for _ in range(40): # 10 seconds timeout
+            for _ in range(40):
                 if not xray.is_running():
                     print("\n--- XRAY CRASHED! ---")
                     break
@@ -198,13 +269,13 @@ def main():
                 time.sleep(0.25)
             else:
                 if xray.is_running():
-                     raise RuntimeError(f"Timeout: Not all ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
+                    raise RuntimeError(f"Timeout: Not all ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
                 else:
                     raise RuntimeError("Xray crashed during port check.")
 
             if not ready_ports:
-                 print("\n--- No ports became ready. Aborting tests. ---")
-                 return
+                print("\n--- No ports became ready. Aborting tests. ---")
+                return
 
             print("\n--- Starting all checks concurrently ---")
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
