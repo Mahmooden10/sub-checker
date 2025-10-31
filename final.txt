@@ -1,2 +1,1 @@
-vless://638c1918-f6f0-4ecc-85e6-a3ac50ed9c02@157.180.123.25:443?path=%2Flinkws%3Fed%3D2560&security=&encryption=none&host=157.180.123.25&type=ws#>>@FreakConfig::FI
-ss://YWVzLTI1Ni1nY206ZGFkYTA4MDE=@54.81.226.31:80#>>@v2nodes::US
+
