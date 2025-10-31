@@ -201,14 +201,11 @@ def main():
 
     all_uris = Path(INPUT_CONFIGS_PATH).read_text().splitlines()
     configs_with_uris = []
-    parsed_count = 0
     for uri in all_uris:
-        p = parse_uri(uri)
-        if p:
+        if p := parse_uri(uri):
             configs_with_uris.append({'params': p, 'original_uri': uri})
-            parsed_count += 1
 
-    print(f"Successfully parsed {parsed_count} configs out of {len(all_uris)}.")
+    print(f"Successfully parsed {len(configs_with_uris)} configs out of {len(all_uris)}.")
 
     unique_items_map = {}
     for item in configs_with_uris:
@@ -232,78 +229,87 @@ def main():
     else:
         print("--- CI environment detected. Skipping automatic binary download. ---")
 
-    builder = XrayConfigBuilder()
-    base_port = 20800
-    expected_ports = set()
-    items_to_test = []
-    for item in unique_items:
-        if item['params'].protocol in ["vless", "vmess", "trojan", "ss", "socks", "mvless"]:
-            local_port = base_port + len(items_to_test)
-            unique_outbound_tag = f"proxy_out_{local_port}"
-            outbound = builder.build_outbound_from_params(item['params'], explicit_tag=unique_outbound_tag)
-
-            if outbound:
-                item['local_port'] = local_port
-                items_to_test.append(item)
-                expected_ports.add(local_port)
-
-                builder.add_inbound({"port": local_port, "listen": "127.0.0.1", "protocol": "socks", "tag": f"inbound-{local_port}"})
-                builder.add_outbound(outbound)
-                builder.config["routing"]["rules"].append({"type": "field", "inboundTag": [f"inbound-{local_port}"], "outboundTag": unique_outbound_tag})
-
-    if not items_to_test:
-        print("No Xray-compatible configurations found to test.")
-        return
-
     final_uris_to_write = []
-    try:
-        with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
-            time.sleep(1)
-            if not xray.is_running():
-                raise RuntimeError("Xray process failed to start. The config might still have issues.")
+    BATCH_SIZE = 50
+    base_port_start = 20800
 
-            print(f"\n--- Xray is running with {len(items_to_test)} proxies. Waiting for ports... ---")
+    for i in range(0, len(unique_items), BATCH_SIZE):
+        batch_items = unique_items[i:i + BATCH_SIZE]
+        print(f"\n--- Processing Batch {i//BATCH_SIZE + 1} ({len(batch_items)} configs) ---")
 
-            ready_ports = set()
-            for _ in range(40):
+        builder = XrayConfigBuilder()
+        items_to_test_in_batch = []
+        expected_ports = set()
+
+        for idx, item in enumerate(batch_items):
+            if item['params'].protocol in ["vless", "vmess", "trojan", "ss", "socks", "mvless"]:
+                local_port = base_port_start + idx
+                unique_outbound_tag = f"proxy_out_{local_port}"
+                outbound = builder.build_outbound_from_params(item['params'], explicit_tag=unique_outbound_tag)
+
+                if outbound:
+                    item['local_port'] = local_port
+                    items_to_test_in_batch.append(item)
+                    expected_ports.add(local_port)
+
+                    builder.add_inbound({"port": local_port, "listen": "127.0.0.1", "protocol": "socks", "tag": f"inbound-{local_port}"})
+                    builder.add_outbound(outbound)
+                    builder.config["routing"]["rules"].append({"type": "field", "inboundTag": [f"inbound-{local_port}"], "outboundTag": unique_outbound_tag})
+
+        if not items_to_test_in_batch:
+            print("No Xray-compatible configurations found in this batch. Skipping.")
+            continue
+
+        try:
+            with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
+                time.sleep(1)
                 if not xray.is_running():
-                    print("\n--- XRAY CRASHED! ---")
-                    break
-                ports_to_check = expected_ports - ready_ports
-                for port in ports_to_check:
-                    try:
-                        with socket.create_connection(("127.0.0.1", port), timeout=0.25):
-                            ready_ports.add(port)
-                    except (socket.timeout, ConnectionRefusedError):
-                        pass
-                if ready_ports == expected_ports:
-                    print(f"All {len(expected_ports)} ports are ready.")
-                    break
-                time.sleep(0.25)
-            else:
-                if xray.is_running():
-                    raise RuntimeError(f"Timeout: Not all ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
+                    raise RuntimeError("Xray process failed to start for this batch. The batch may contain a malformed config.")
+
+                print(f"  Xray is running for this batch. Waiting for {len(expected_ports)} ports...")
+
+                ready_ports = set()
+                for _ in range(40):
+                    if not xray.is_running():
+                        print("\n  --- XRAY CRASHED! Skipping this batch. ---")
+                        break
+                    ports_to_check = expected_ports - ready_ports
+                    for port in ports_to_check:
+                        try:
+                            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                                ready_ports.add(port)
+                        except (socket.timeout, ConnectionRefusedError):
+                            pass
+                    if ready_ports == expected_ports:
+                        print(f"  All {len(expected_ports)} ports are ready.")
+                        break
+                    time.sleep(0.25)
                 else:
-                    raise RuntimeError("Xray crashed during port check.")
+                    if xray.is_running():
+                        raise RuntimeError(f"  Timeout: Not all ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
+                    else:
+                        raise RuntimeError("Xray crashed during port check.")
 
-            if not ready_ports:
-                print("\n--- No ports became ready. Aborting tests. ---")
-                return
 
-            print("\n--- Starting all checks concurrently ---")
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_item = {executor.submit(check_one_proxy, item, test_url): item for item in items_to_test}
-                for future in as_completed(future_to_item):
-                    if result_uri := future.result():
-                        final_uris_to_write.append(result_uri)
+                if len(ready_ports) != len(expected_ports):
+                    logging.warning(f"Not all ports were ready ({len(ready_ports)}/{len(expected_ports)}). Continuing with what's available.")
 
-    except Exception as e:
-        logging.critical(f"A critical error occurred: {e}", exc_info=False)
 
-    finally:
-        print(f"\n--- Writing {len(final_uris_to_write)} Final Configurations ---")
-        Path(FINAL_CONFIGS_PATH).write_text("\n".join(final_uris_to_write) + "\n")
-        print("\n--- Script finished successfully! ---")
+                print(f"  Starting checks for batch...")
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    future_to_item = {executor.submit(check_one_proxy, item, test_url): item for item in items_to_test_in_batch}
+                    for future in as_completed(future_to_item):
+                        if result_uri := future.result():
+                            final_uris_to_write.append(result_uri)
+
+        except Exception as e:
+            logging.error(f"  [FAIL] Critical error in batch {i//BATCH_SIZE + 1}: {e}", exc_info=False)
+            logging.warning("  Skipping to the next batch.")
+            continue
+
+    print(f"\n--- Writing {len(final_uris_to_write)} Final Configurations ---")
+    Path(FINAL_CONFIGS_PATH).write_text("\n".join(final_uris_to_write) + "\n")
+    print("\n--- Script finished successfully! ---")
 
 if __name__ == "__main__":
     main()
