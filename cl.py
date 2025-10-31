@@ -5,7 +5,7 @@ from pathlib import Path
 import logging
 
 from python_v2ray.config_parser import parse_uri, XrayConfigBuilder
-from python_v2ray.core import XrayCore # از کلاس اصلی خودتان استفاده می‌کنیم
+from python_v2ray.core import XrayCore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 INPUT_CONFIGS_PATH = "normal.txt"
-BAD_CONFIGS_LOG_PATH = "bad_configs.txt"
+BAD_CONFIGS_LOG_PATH = "bad_configs.txt" # همچنان فایل را برای اطمینان می‌سازیم
 # --- پایان تنظیمات ---
 
 def main():
@@ -35,11 +35,9 @@ def main():
 
         params = parse_uri(uri)
         if not params:
-            # اگر پارسر نتواند آن را بخواند، احتمالاً بد است
             bad_configs.append(f"UNPARSABLE: {uri}")
             continue
         
-        # فقط پروتکل‌هایی که Xray پشتیبانی می‌کند را تست می‌کنیم
         if params.protocol not in ["vless", "vmess", "trojan", "ss", "socks", "mvless"]:
             continue
 
@@ -57,15 +55,12 @@ def main():
             "type": "field", "inboundTag": ["socks-in"], "outboundTag": outbound["tag"]
         })
 
-        # حالا با این کانفیگ تکی، Xray را اجرا می‌کنیم
         try:
             with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder) as xray:
-                time.sleep(0.5) # زمان کوتاه برای اجرا یا کرش کردن
+                time.sleep(0.5)
                 if not xray.is_running():
-                    # اگر Xray اجرا نشد، این کانفیگ خراب است!
                     logging.warning(f"\n[!!!] Found a bad config at line {i+1}. Xray failed to start.")
                     bad_configs.append(f"XRAY_CRASH: {uri}")
-            # اگر with بدون خطا تمام شد، یعنی کانفیگ سالم است و Xray متوقف شده
         except Exception as e:
             logging.error(f"\n[!!!] An unexpected error occurred for URI at line {i+1}: {e}")
             bad_configs.append(f"EXCEPTION: {uri}")
@@ -77,9 +72,18 @@ def main():
         print("[SUCCESS] All parsable configs were validated successfully by Xray!")
     else:
         print(f"[FAIL] Found {len(bad_configs)} problematic configs.")
+        
+        # ذخیره در فایل
         with open(BAD_CONFIGS_LOG_PATH, "w", encoding="utf-8") as f:
             f.write("\n".join(bad_configs))
         print(f"A list of them has been saved to '{BAD_CONFIGS_LOG_PATH}'.")
+        
+        # *** تغییر مهم: چاپ مستقیم در خروجی برای GitHub Actions ***
+        print("\n--- PRINTING PROBLEMATIC CONFIGS TO LOG ---")
+        for bad_config in bad_configs:
+            print(bad_config)
+        print("--- END OF PROBLEMATIC CONFIGS ---")
+
     print("="*50)
 
 
