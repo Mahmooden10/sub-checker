@@ -47,10 +47,10 @@ jobs:
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
-          key: pip-cache-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/requirements.txt') }}
+          key: pip-cache-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/requirements.txt') }}
           path: ~/.cache/pip
           restore-keys: |
-            pip-cache-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+            pip-cache-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
