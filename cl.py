@@ -201,11 +201,24 @@ def main():
 
     all_uris = Path(INPUT_CONFIGS_PATH).read_text().splitlines()
     configs_with_uris = []
+    parsed_count = 0
     for uri in all_uris:
         p = parse_uri(uri)
-        if p: configs_with_uris.append({'params': p, 'original_uri': uri})
-    unique_items = list({(item['params'].protocol, item['params'].address, item['params'].port, item['params'].id): item for item in configs_with_uris}.values())
-    print(f"Found {len(unique_items)} unique configurations.")
+        if p:
+            configs_with_uris.append({'params': p, 'original_uri': uri})
+            parsed_count += 1
+
+    print(f"Successfully parsed {parsed_count} configs out of {len(all_uris)}.")
+
+    unique_items_map = {}
+    for item in configs_with_uris:
+        p = item['params']
+        key = (p.protocol, p.address, p.port, p.id, p.security, p.network, p.sni, p.path)
+        if key not in unique_items_map:
+            unique_items_map[key] = item
+    unique_items = list(unique_items_map.values())
+
+    print(f"Found {len(unique_items)} unique configurations to test.")
 
     if not os.environ.get('CI'):
         print("--- Local environment detected. Checking/downloading binaries... ---")
