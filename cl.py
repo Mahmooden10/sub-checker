@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
-CONFIG_FILE_PATH = "config.json"
+CONFIG_FILE_PATH = "config2.json"
 INPUT_CONFIGS_PATH = "normal.txt"
 FINAL_CONFIGS_PATH = "final.txt"
 MAX_WORKERS = 10
