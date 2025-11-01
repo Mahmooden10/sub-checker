@@ -1,5 +1,6 @@
-python-v2ray
+python-v2ray==0.1.7.6
 requests
 psutil
 retrying
+
 PyYAML
