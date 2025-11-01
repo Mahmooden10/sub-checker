@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from python_v2ray.downloader import BinaryDownloader
 from python_v2ray.config_parser import parse_uri, XrayConfigBuilder
 from python_v2ray.core import XrayCore
+from python_v2ray.hysteria_manager import HysteriaCore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -189,10 +190,8 @@ def check_one_proxy(item: dict, test_url: str) -> Optional[str]:
     except Exception as e:
         logging.error(f"  [FAIL] Test failed for {config_param.display_tag}. Reason: {str(e)[:120]}")
         return None
-
-
 def main():
-    print("--- Starting Fully Concurrent Refactored Script ---")
+    print("--- Starting Full Protocol Checker Script ---")
     try:
         with open(CONFIG_FILE_PATH, "r") as f: settings = json.load(f)
         test_url = settings.get("core", {}).get("test_url", "http://connectivitycheck.gstatic.com/generate_204")
@@ -210,11 +209,10 @@ def main():
     unique_items_map = {}
     for item in configs_with_uris:
         p = item['params']
-        key = (p.protocol, p.address, p.port, p.id, p.security, p.network, p.sni, p.path)
+        key = (p.protocol, p.address, p.port, p.id, p.password, p.hy2_password, p.wg_secret_key)
         if key not in unique_items_map:
             unique_items_map[key] = item
     unique_items = list(unique_items_map.values())
-
     print(f"Found {len(unique_items)} unique configurations to test.")
 
     if not os.environ.get('CI'):
@@ -224,26 +222,36 @@ def main():
             downloader.ensure_all()
             print("Binaries are ready.")
         except Exception as e:
-            print(f"Fatal Error during binary check: {e}")
-            return
+            print(f"Fatal Error during binary check: {e}"); return
     else:
         print("--- CI environment detected. Skipping automatic binary download. ---")
 
+    xray_items = []
+    hysteria_items = []
+    for item in unique_items:
+        proto = item['params'].protocol
+        if proto in ["vless", "vmess", "trojan", "ss", "socks", "mvless"]:
+            xray_items.append(item)
+        elif proto in ["hysteria", "hysteria2", "hy2"]:
+            hysteria_items.append(item)
+
     final_uris_to_write = []
-    BATCH_SIZE = 50
     base_port_start = 20800
 
-    for i in range(0, len(unique_items), BATCH_SIZE):
-        batch_items = unique_items[i:i + BATCH_SIZE]
-        print(f"\n--- Processing Batch {i//BATCH_SIZE + 1} ({len(batch_items)} configs) ---")
+    if xray_items:
+        print(f"\n--- Found {len(xray_items)} Xray-compatible configs to test ---")
+        BATCH_SIZE = 50
+        for i in range(0, len(xray_items), BATCH_SIZE):
+            batch_items = xray_items[i:i + BATCH_SIZE]
+            print(f"\n--- Processing Xray Batch {i//BATCH_SIZE + 1} ({len(batch_items)} configs) ---")
 
-        builder = XrayConfigBuilder()
-        items_to_test_in_batch = []
-        expected_ports = set()
+            builder = XrayConfigBuilder()
+            items_to_test_in_batch = []
+            expected_ports = set()
 
-        for idx, item in enumerate(batch_items):
-            if item['params'].protocol in ["vless", "vmess", "trojan", "ss", "socks", "mvless"]:
-                local_port = base_port_start + idx
+            for idx, item in enumerate(batch_items):
+
+                local_port = base_port_start + i + idx
                 unique_outbound_tag = f"proxy_out_{local_port}"
                 outbound = builder.build_outbound_from_params(item['params'], explicit_tag=unique_outbound_tag)
 
@@ -256,56 +264,85 @@ def main():
                     builder.add_outbound(outbound)
                     builder.config["routing"]["rules"].append({"type": "field", "inboundTag": [f"inbound-{local_port}"], "outboundTag": unique_outbound_tag})
 
-        if not items_to_test_in_batch:
-            print("No Xray-compatible configurations found in this batch. Skipping.")
-            continue
+            if not items_to_test_in_batch:
+                print("No Xray-compatible configurations found in this batch. Skipping.")
+                continue
+
+            try:
+                with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
+                    time.sleep(1)
+                    if not xray.is_running():
+                        raise RuntimeError("Xray process failed to start for this batch. The batch may contain a malformed config.")
+
+                    print(f"  Xray is running for this batch. Waiting for {len(expected_ports)} ports...")
+
+                    ready_ports = set()
+                    for _ in range(40):
+                        if not xray.is_running():
+                            print("\n  --- XRAY CRASHED! Skipping this batch. ---")
+                            break
+                        ports_to_check = expected_ports - ready_ports
+                        for port in ports_to_check:
+                            try:
+                                with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                                    ready_ports.add(port)
+                            except (socket.timeout, ConnectionRefusedError):
+                                pass
+                        if ready_ports == expected_ports:
+                            print(f"  All {len(expected_ports)} ports are ready.")
+                            break
+                        time.sleep(0.25)
+                    else:
+                        if xray.is_running():
+                            raise RuntimeError(f"  Timeout: Not all ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
+                        else:
+                            raise RuntimeError("Xray crashed during port check.")
+
+                    if len(ready_ports) != len(expected_ports):
+                        logging.warning(f"Not all ports were ready ({len(ready_ports)}/{len(expected_ports)}). Continuing with what's available.")
+
+                    print(f"  Starting Xray checks for batch...")
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        future_to_item = {executor.submit(check_one_proxy, item, test_url): item for item in items_to_test_in_batch}
+                        for future in as_completed(future_to_item):
+                            if result_uri := future.result():
+                                final_uris_to_write.append(result_uri)
+
+            except Exception as e:
+                logging.error(f"  [FAIL] Critical error in Xray batch {i//BATCH_SIZE + 1}: {e}", exc_info=False)
+                logging.warning("  Skipping to the next batch.")
+                continue
+
+    if hysteria_items:
+        print(f"\n--- Found {len(hysteria_items)} Hysteria configs to test ---")
+        hysteria_managers = []
+        hysteria_jobs_for_test = []
+
+        hysteria_base_port = base_port_start + len(xray_items)
+
+        for i, item in enumerate(hysteria_items):
+            local_port = hysteria_base_port + i
+            item['local_port'] = local_port
+            hysteria_jobs_for_test.append(item)
+            manager = HysteriaCore(str(VENDOR_PATH), params=item['params'], local_port=local_port)
+            hysteria_managers.append(manager)
 
         try:
-            with XrayCore(vendor_path=str(VENDOR_PATH), config_builder=builder, debug_mode=True) as xray:
-                time.sleep(1)
-                if not xray.is_running():
-                    raise RuntimeError("Xray process failed to start for this batch. The batch may contain a malformed config.")
+            print(f"Starting {len(hysteria_managers)} Hysteria client(s)...")
+            for manager in hysteria_managers:
+                manager.start()
 
-                print(f"  Xray is running for this batch. Waiting for {len(expected_ports)} ports...")
-
-                ready_ports = set()
-                for _ in range(40):
-                    if not xray.is_running():
-                        print("\n  --- XRAY CRASHED! Skipping this batch. ---")
-                        break
-                    ports_to_check = expected_ports - ready_ports
-                    for port in ports_to_check:
-                        try:
-                            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
-                                ready_ports.add(port)
-                        except (socket.timeout, ConnectionRefusedError):
-                            pass
-                    if ready_ports == expected_ports:
-                        print(f"  All {len(expected_ports)} ports are ready.")
-                        break
-                    time.sleep(0.25)
-                else:
-                    if xray.is_running():
-                        raise RuntimeError(f"  Timeout: Not all ports became ready. {len(ready_ports)}/{len(expected_ports)} ready.")
-                    else:
-                        raise RuntimeError("Xray crashed during port check.")
-
-
-                if len(ready_ports) != len(expected_ports):
-                    logging.warning(f"Not all ports were ready ({len(ready_ports)}/{len(expected_ports)}). Continuing with what's available.")
-
-
-                print(f"  Starting checks for batch...")
-                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    future_to_item = {executor.submit(check_one_proxy, item, test_url): item for item in items_to_test_in_batch}
-                    for future in as_completed(future_to_item):
-                        if result_uri := future.result():
-                            final_uris_to_write.append(result_uri)
-
-        except Exception as e:
-            logging.error(f"  [FAIL] Critical error in batch {i//BATCH_SIZE + 1}: {e}", exc_info=False)
-            logging.warning("  Skipping to the next batch.")
-            continue
+            time.sleep(2)
+            print("\n--- Starting Hysteria checks concurrently ---")
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                future_to_item = {executor.submit(check_one_proxy, item, test_url): item for item in hysteria_jobs_for_test}
+                for future in as_completed(future_to_item):
+                    if result_uri := future.result():
+                        final_uris_to_write.append(result_uri)
+        finally:
+            print("Stopping all Hysteria clients...")
+            for manager in reversed(hysteria_managers):
+                manager.stop()
 
     print(f"\n--- Writing {len(final_uris_to_write)} Final Configurations ---")
     Path(FINAL_CONFIGS_PATH).write_text("\n".join(final_uris_to_write) + "\n")
