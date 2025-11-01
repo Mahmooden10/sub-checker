@@ -66,10 +66,6 @@ jobs:
         # بهتره یک فایل requirements.txt بسازید و از اون استفاده کنید:
         # run: pip install -r requirements.txt
 
-      - name: Set execute permissions
-        run: |
-          chmod +x xray/xray
-          chmod +x hy2/hysteria
 
       - name: Run checker script
         run: python cl.py
