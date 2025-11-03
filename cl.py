@@ -16,6 +16,9 @@ from python_v2ray.config_parser import parse_uri, XrayConfigBuilder
 from python_v2ray.core import XrayCore
 from python_v2ray.hysteria_manager import HysteriaCore
 
+import base64
+import urllib.parse
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -56,12 +59,41 @@ def fetch_country_code(proxies: dict) -> str:
 
 
 def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
-    parts = original_uri.strip().split("#", 1)
-    base = parts[0]
-    p = parse_uri(original_uri)
-    if not p: return original_uri
-    base_name = p.display_tag.split("::")[0].strip()
-    return f"{base}#{base_name}::{country_code}"
+
+    uri = original_uri.strip()
+    country_code = country_code.upper()
+
+    if uri.startswith("vmess://"):
+        try:
+            parts = uri.split('#', 1)
+            base_part = parts[0]
+
+            encoded_json = base_part.replace("vmess://", "")
+            encoded_json += '=' * (-len(encoded_json) % 4)
+
+            decoded_json = base64.b64decode(encoded_json).decode('utf-8')
+            vmess_data = json.loads(decoded_json)
+
+            original_ps = vmess_data.get("ps", "")
+            cleaned_ps = re.sub(r'::[A-Z]{2}$', '', original_ps).strip()
+            vmess_data["ps"] = f"{cleaned_ps}::{country_code}"
+
+            updated_json = json.dumps(vmess_data, separators=(',', ':'))
+            updated_b64 = base64.b64encode(updated_json.encode('utf-8')).decode('utf-8').rstrip('=')
+
+            return "vmess://" + updated_b64
+
+        except Exception as e:
+            logging.warning(f"Could not inject location into VMess PS tag for '{uri[:30]}...': {e}. Appending externally as fallback.")
+            return f"{uri}::{country_code}"
+
+    elif '#' in uri:
+        base_uri, tag = uri.split('#', 1)
+        cleaned_tag = re.sub(r'::[A-Z]{2}$', '', tag).strip()
+        new_tag = f"{cleaned_tag}::{country_code}"
+        return f"{base_uri}#{urllib.parse.quote(new_tag)}"
+    else:
+        return f"{uri}#::{country_code}"
 
 
 def is_ip_accessible_from_iran_via_check_host(ip_to_check_on_checkhost: str,
