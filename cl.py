@@ -19,6 +19,8 @@ from python_v2ray.hysteria_manager import HysteriaCore
 import base64
 import urllib.parse
 
+import argparse
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -191,7 +193,7 @@ timeout_seconds: int = 35) -> Optional[bool]:
         return None
 
 
-def check_one_proxy(item: dict, test_url: str) -> Optional[str]:
+def check_one_proxy(item: dict, test_url: str, check_loc_enabled: bool, check_iran_enabled: bool) -> Optional[str]:
     config_param, original_uri, local_port = item['params'], item['original_uri'], item['local_port']
     logging.info(f"--> Starting check for: {config_param.display_tag} on port {local_port}")
     proxies = {"http": f"socks5h://127.0.0.1:{local_port}", "https": f"socks5h://127.0.0.1:{local_port}"}
@@ -203,7 +205,7 @@ def check_one_proxy(item: dict, test_url: str) -> Optional[str]:
 
         exit_ip = get_public_ipv4(proxies)
 
-        if CHECK_IRAN:
+        if check_iran_enabled:
             is_inaccessible_from_iran = is_ip_accessible_from_iran_via_check_host(exit_ip, proxies)
             if is_inaccessible_from_iran is False:  # False means it IS accessible
                 logging.warning(f"  [FILTERED] {config_param.display_tag} is accessible from Iran and has been removed.")
@@ -211,7 +213,7 @@ def check_one_proxy(item: dict, test_url: str) -> Optional[str]:
             if is_inaccessible_from_iran is None: # Inconclusive check
                 logging.warning(f"  [WARNING] Iran accessibility check for {config_param.display_tag} was inconclusive. Allowing it to pass.")
 
-        if CHECK_LOC:
+        if check_loc_enabled:
             country_code = fetch_country_code(proxies)
             final_uri = get_ip_details_and_retag(original_uri, country_code)
             logging.info(f"  [ADDED] {config_param.display_tag} passed all checks.")
@@ -381,4 +383,33 @@ def main():
     print("\n--- Script finished successfully! ---")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="V2Ray/Hysteria Config Checker (with optional overrides)")
+    parser.add_argument(
+        '--location',
+        dest='check_loc_override',
+        choices=['true', 'false'],
+        help="Override the default CHECK_LOC setting. Use 'true' or 'false'."
+    )
+    parser.add_argument(
+        '--iran-check',
+        dest='check_iran_override',
+        choices=['true', 'false'],
+        help="Override the default CHECK_IRAN setting. Use 'true' or 'false'."
+    )
+    args = parser.parse_args()
+
+    check_loc_enabled = CHECK_LOC
+    check_iran_enabled = CHECK_IRAN
+
+    if args.check_loc_override is not None:
+        check_loc_enabled = (args.check_loc_override == 'true')
+        print(f"--- Overriding Location Check via command line: Set to {check_loc_enabled} ---")
+
+    if args.check_iran_override is not None:
+        check_iran_enabled = (args.check_iran_override == 'true')
+        print(f"--- Overriding Iran Check via command line: Set to {check_iran_enabled} ---")
+
+    print(f"--- Starting Full Protocol Checker Script ---")
+    print(f"Effective Location Check: {'Enabled' if check_loc_enabled else 'Disabled'}")
+    print(f"Effective Iran Accessibility Check: {'Enabled' if check_iran_enabled else 'Disabled'}")
     main()
