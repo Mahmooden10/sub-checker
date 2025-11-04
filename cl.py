@@ -337,7 +337,7 @@ def main():
 
                     print(f"  Starting Xray checks for batch...")
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                        future_to_item = {executor.submit(check_one_proxy, item, test_url): item for item in items_to_test_in_batch}
+                        future_to_item = {executor.submit(check_one_proxy, item, test_url,check_loc_enabled,check_iran_enabled  ): item for item in items_to_test_in_batch}
                         for future in as_completed(future_to_item):
                             if result_uri := future.result():
                                 final_uris_to_write.append(result_uri)
