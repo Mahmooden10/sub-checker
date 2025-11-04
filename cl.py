@@ -224,7 +224,8 @@ def check_one_proxy(item: dict, test_url: str, check_loc_enabled: bool, check_ir
     except Exception as e:
         logging.error(f"  [FAIL] Test failed for {config_param.display_tag}. Reason: {str(e)[:120]}")
         return None
-def main():
+def main(check_loc_enabled: bool, check_iran_enabled: bool):
+
     print("--- Starting Full Protocol Checker Script ---")
     try:
         with open(CONFIG_FILE_PATH, "r") as f: settings = json.load(f)
@@ -412,4 +413,4 @@ if __name__ == "__main__":
     print(f"--- Starting Full Protocol Checker Script ---")
     print(f"Effective Location Check: {'Enabled' if check_loc_enabled else 'Disabled'}")
     print(f"Effective Iran Accessibility Check: {'Enabled' if check_iran_enabled else 'Disabled'}")
-    main()
+    main(check_loc_enabled, check_iran_enabled)
