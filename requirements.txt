@@ -1,8 +1,10 @@
+pydantic==2.12.4
 python-v2ray==0.1.7.8
 requests
 psutil
 retrying
 
 PyYAML
+
 
 
