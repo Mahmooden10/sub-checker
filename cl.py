@@ -58,7 +58,16 @@ def fetch_country_code(proxies: dict) -> str:
         logging.info(f"  Successfully fetched country code: {country}"); return country
     except Exception:
         logging.warning("  Could not fetch country code."); return "XX"
+def full_unquote(s: str) -> str:
 
+    if '%' not in s:
+        return s
+
+    prev_s = ""
+    while s != prev_s:
+        prev_s = s
+        s = urllib.parse.unquote(s)
+    return s
 def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
     uri = original_uri.strip()
     country_code = country_code.upper()
@@ -75,7 +84,7 @@ def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
             vmess_data = json.loads(decoded_json)
 
             original_ps = vmess_data.get("ps", "")
-            cleaned_ps = urllib.parse.unquote(original_ps)
+            cleaned_ps = full_unquote(original_ps)
             cleaned_ps = re.sub(r'::[A-Z]{2}$', '', cleaned_ps).strip()
             vmess_data["ps"] = f"{cleaned_ps}::{country_code}"
 
@@ -91,7 +100,7 @@ def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
     elif '#' in uri:
         base_uri, tag = uri.split('#', 1)
 
-        decoded_tag = urllib.parse.unquote(tag)
+        decoded_tag = full_unquote(tag)
 
         cleaned_tag = re.sub(r'::[A-Z]{2}$', '', decoded_tag).strip()
 
