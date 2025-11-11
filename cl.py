@@ -264,16 +264,15 @@ def main():
     unique_items = list(unique_items_map.values())
     print(f"Found {len(unique_items)} unique configurations to test.")
 
-    if not os.environ.get('CI'):
-        print("--- Local environment detected. Checking/downloading binaries... ---")
-        try:
-            downloader = BinaryDownloader(PROJECT_ROOT)
-            downloader.ensure_all()
-            print("Binaries are ready.")
-        except Exception as e:
-            print(f"Fatal Error during binary check: {e}"); return
-    else:
-        print("--- CI environment detected. Skipping automatic binary download. ---")
+    print("--- Ensuring all necessary binaries are available... ---")
+    try:
+        downloader = BinaryDownloader(PROJECT_ROOT)
+        downloader.ensure_all()
+        print("--- Binaries are ready. ---")
+    except Exception as e:
+        # If download fails, the script cannot continue.
+        print(f"Fatal Error: Could not obtain necessary binaries: {e}")
+        return
 
     xray_items = []
     hysteria_items = []
