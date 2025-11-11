@@ -21,28 +21,28 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 
-      - name: Move and Rename Binaries for Compatibility
-        run: |
-          echo "Restructuring directories for compatibility..."
-          mkdir -p vendor
-          
-          # Move xray executable to the correct location and name
-          mv xray/xray vendor/xray_linux
-          
-          # Move hysteria executable to the correct location and name
-          mv hy2/hysteria vendor/hysteria_linux
-          
-          echo "Successfully moved and renamed binaries. Final structure of 'vendor' directory:"
-          ls -l vendor
-      - name: Set Execute Permissions
-        run: |
-          chmod +x vendor/xray_linux
-          chmod +x vendor/hysteria_linux
-          echo "Execute permissions set on binaries."
+      # - name: Move and Rename Binaries for Compatibility
+      #   run: |
+      #     echo "Restructuring directories for compatibility..."
+      #     mkdir -p vendor
+
+      #     # Move xray executable to the correct location and name
+      #     mv xray/xray vendor/xray_linux
+
+      #     # Move hysteria executable to the correct location and name
+      #     mv hy2/hysteria vendor/hysteria_linux
+
+      #     echo "Successfully moved and renamed binaries. Final structure of 'vendor' directory:"
+      #     ls -l vendor
+      # - name: Set Execute Permissions
+      #   run: |
+      #     chmod +x vendor/xray_linux
+      #     chmod +x vendor/hysteria_linux
+      #     echo "Execute permissions set on binaries."
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # استفاده از نسخه مشخص بهتر است
+          python-version: '3.11'
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -55,11 +55,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ----- مرحله Set execute permissions حذف شد -----
-      # کتابخانه python_v2ray خودش این کار را انجام می‌دهد.
 
       - name: Run checker script
-        # !!! مطمئن شوید که دارید اسکریپت جدید را اجرا می‌کنید !!!
         run: python cl.py
 
       - name: Commit and Push changes
