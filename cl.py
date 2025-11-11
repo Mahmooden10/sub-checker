@@ -26,9 +26,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 VENDOR_PATH = PROJECT_ROOT / "vendor"
 CORE_ENGINE_PATH = PROJECT_ROOT / "core_engine"
-CONFIG_FILE_PATH = "config.json"
-INPUT_CONFIGS_PATH = "normal.txt"
-FINAL_CONFIGS_PATH = "final.txt"
+CONFIG_FILE_PATH = PROJECT_ROOT / "config.json"
+INPUT_CONFIGS_PATH = PROJECT_ROOT / "normal.txt"
+FINAL_CONFIGS_PATH = PROJECT_ROOT / "final.txt"
 MAX_WORKERS = 10
 
 CHECK_LOC = True
@@ -58,6 +58,7 @@ def fetch_country_code(proxies: dict) -> str:
         logging.info(f"  Successfully fetched country code: {country}"); return country
     except Exception:
         logging.warning("  Could not fetch country code."); return "XX"
+
 def full_unquote(s: str) -> str:
 
     if '%' not in s:
@@ -69,6 +70,7 @@ def full_unquote(s: str) -> str:
         s = urllib.parse.unquote(s)
     return s
 def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
+
     uri = original_uri.strip()
     country_code = country_code.upper()
 
@@ -85,7 +87,6 @@ def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
 
             original_ps = vmess_data.get("ps", "")
             cleaned_ps = full_unquote(original_ps)
-            cleaned_ps = re.sub(r'::[A-Z]{2}$', '', cleaned_ps).strip()
             vmess_data["ps"] = f"{cleaned_ps}::{country_code}"
 
             updated_json = json.dumps(vmess_data, separators=(',', ':'))
@@ -99,16 +100,9 @@ def get_ip_details_and_retag(original_uri: str, country_code: str) -> str:
 
     elif '#' in uri:
         base_uri, tag = uri.split('#', 1)
-
-        decoded_tag = full_unquote(tag)
-
-        cleaned_tag = re.sub(r'::[A-Z]{2}$', '', decoded_tag).strip()
-
+        cleaned_tag = re.sub(r'::[A-Z]{2}$', '', tag).strip()
         new_tag = f"{cleaned_tag}::{country_code}"
-
-        final_encoded_tag = urllib.parse.quote(new_tag)
-
-        return f"{base_uri}#{final_encoded_tag}"
+        return f"{base_uri}#{urllib.parse.quote(new_tag)}"
     else:
         return f"{uri}#::{country_code}"
 
@@ -239,7 +233,8 @@ def check_one_proxy(item: dict, test_url: str, check_loc_enabled: bool, check_ir
     except Exception as e:
         logging.error(f"  [FAIL] Test failed for {config_param.display_tag}. Reason: {str(e)[:120]}")
         return None
-def main():
+def main(check_loc_enabled: bool, check_iran_enabled: bool):
+
     print("--- Starting Full Protocol Checker Script ---")
     try:
         with open(CONFIG_FILE_PATH, "r") as f: settings = json.load(f)
@@ -383,7 +378,7 @@ def main():
             time.sleep(2)
             print("\n--- Starting Hysteria checks concurrently ---")
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_item = {executor.submit(check_one_proxy, item, test_url, check_loc_enabled, check_iran_enabled): item for item in hysteria_jobs_for_test}
+                future_to_item = {executor.submit(check_one_proxy, item, test_url,check_loc_enabled,check_iran_enabled): item for item in hysteria_jobs_for_test}
                 for future in as_completed(future_to_item):
                     if result_uri := future.result():
                         final_uris_to_write.append(result_uri)
@@ -426,4 +421,4 @@ if __name__ == "__main__":
     print(f"--- Starting Full Protocol Checker Script ---")
     print(f"Effective Location Check: {'Enabled' if check_loc_enabled else 'Disabled'}")
     print(f"Effective Iran Accessibility Check: {'Enabled' if check_iran_enabled else 'Disabled'}")
-    main()
+    main(check_loc_enabled, check_iran_enabled)
