@@ -24,7 +24,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-      - name: Move and Rename Binaries for Compatibility
+      # - name: Move and Rename Binaries for Compatibility
       #   run: |
       #     echo "Restructuring directories for compatibility..."
       #     mkdir -p vendor
